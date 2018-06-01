@@ -1,2 +1,2 @@
 # porcupine
-An IRC client library for Haskell
+A process-based concurrency library for Haskell.

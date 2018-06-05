@@ -310,7 +310,8 @@ handleLocalSubscribeMessage pid gid = do
     Nothing -> do addGroup gid $
                     GroupState { groupId = gid,
                                  groupLocalSubscribers = S.empty,
-                                 groupRemoteSubscribers = S.singleton (pid, 1) }
+                                 groupRemoteSubscribers = S.singleton (pid, 1),
+                                 groupEndListeners = S.empty }
   broadcastRemoteMessage $ RemoteSubscribeMessage { rsubProcessId = pid,
                                                     rsubGroupId = gid }
   runNode
@@ -387,11 +388,43 @@ handleLocalConnectRemoteMessage nid key = runNode
 
 -- | Handle a local listen end message.
 handleLocalListenEndMessage :: DestId -> DestId -> St.StateT NodeState IO ()
-handleLocalListenEndMessage listenedId listenerId = runNode
+handleLocalListenEndMessage listenedId listenerId = do
+  case listenedId of
+    ProcessDest pid -> do
+      nid <- nodeId . nodeInfo <$> St.get
+      if pidNodeId pid == nid
+        then registerLocalProcessEndListener pid listenerId
+        else do
+          registerRemoteNodeEndListener (pidNodeId pid) listenerId
+          sendRemoteMessage (pidNodeId pid) $
+            RemoteListenEndMessage { rlendListenedId = listenedId,
+                                     rlendListenerId = listenerId }
+    GroupDest gid -> do
+      registerGroupEndListener gid listenerId
+      broadcastRemoteMessage $
+        RemoteListenEndMessage { rlendListenedId = listenedId,
+                                 rlendListenerId = listenerId }
+  runNode
 
 -- | handle a local unlisten end message.
 handleLocalUnlistenEndMessage :: DestId -> DestId -> St.StateT NodeState IO ()
-handleLocalUnlistenEndMessage listenedId listenerId = runNode
+handleLocalUnlistenEndMessage listenedId listenerId = do
+  case listenedId of
+    ProcessDest pid -> do
+      nid <- nodeId . nodeInfo <$> St.get
+      if pidNodeId pid == nid
+        then unregisterLocalProcessEndListener pid listenerId
+        else do
+          unregisterRemoteNodeEndListener (pidNodeId pid) listenerId
+          sendRemoteMessage (pidNodeId pid) $
+            RemoteUnlistenEndMessage { rulendListenedId = listenedId,
+                                       rulendListenerId = listenerId }
+    GroupDest gid -> do
+      unregisterGroupEndListener gid listenerId
+      broadcastRemoteMessage $
+        RemoteUnlistenEndMessage { rulendListenedId = listenedId,
+                                   rulendListenerId = listenerId }
+  runNode
 
 -- | Handle a local hello message.
 handleLocalHelloMessage :: Node -> St.StateT NodeState IO ()
@@ -510,7 +543,8 @@ handleRemoteUnassignMessage _ name destId = do
 -- | Handle a remote shutdown message.
 handleRemoteShutdownMessage :: NodeId -> ProcessId -> Header -> Payload ->
                                St.StateT NodeState IO ()
-handleRemoteShutdownMessage nid pid header payload = runNode
+handleRemoteShutdownMessage nid pid header payload =
+  shutdownLocalNode pid header payload
 
 -- | Handle a remote hello message.
 handleRemoteHelloMessage :: NodeId -> NodeId -> Key -> St.StateT NodeState IO ()
@@ -519,12 +553,28 @@ handleRemoteHelloMessage nid nid' key = runNode
 -- | Handle a remote listen end message.
 handleRemoteListenEndMessage :: NodeId -> DestId -> DestId ->
                                 St.StateT NodeState IO ()
-handleRemoteListenEndMessage nid listenedId listenerId = runNode
+handleRemoteListenEndMessage nid listenedId listenerId = do
+  case listenedId of
+    ProcessDest pid -> do
+      selfNid <- nodeId . nodeInfo <$> St.get
+      if pidNodeId pid == selfNid
+        then registerLocalProcessEndListener pid listenerId
+        else return ()
+    GroupDest gid -> registerGroupEndListener gid listenerId
+  runNode
 
 -- | Handle a remote unlisten end message.
 handleRemoteUnlistenEndMessage :: NodeId -> DestId -> DestId ->
                                   St.StateT NodeState IO ()
-handleRemoteUnlistenEndMessage nid listenedId listenerId = runNode
+handleRemoteUnlistenEndMessage nid listenedId listenerId = do
+  case listenedId of
+    ProcessDest pid -> do
+      selfNid <- nodeId . nodeInfo <$> St.get
+      if pidNodeId pid == selfNid
+        then unregisterLocalProcessEndListener pid listenerId
+        else return ()
+    GroupDest gid -> unregisterGroupEndListener gid listenerId
+  runNode
 
 -- | Handle a remote join message.
 handleRemoteJoinMessage :: NodeId -> NodeId -> St.StateT NodeState IO ()
@@ -572,12 +622,9 @@ sendUserMessage destId sourceId header payload = do
                                   rumsgHeader = header,
                                   rumsgPayload = payload }
 -- | Send a locall message.
-sendLocalMessage :: NodeId -> Message -> St.StateT NodeState IO ()
-sendLocalMessage nid message = do
-  state <- St.get
-  case M.lookup nid $ nodeLocalNodes state of
-    Just node -> liftIO . atomically $ writeTQueue (nodeQueue node) message
-    Nothing -> return ()
+sendLocalMessage :: Node -> Message -> St.StateT NodeState IO ()
+sendLocalMessage node message = do
+  liftIO . atomically $ writeTQueue (nodeQueue node) message
 
 -- | Send a remote message.
 sendRemoteMessage :: NodeId -> RemoteMessage -> St.StateT NodeState IO ()
@@ -730,25 +777,145 @@ killGroupForRemote sourceId gid header payload = do
         killLocalProcess $ NormalSource pid
     Nothing -> return ()
 
--- | Update a process Id.
+-- | Update a process.
 updateProcess :: (ProcessState -> ProcessState) -> ProcessId ->
                  St.StateT NodeState IO ()
 updateProcess f pid =
   St.modify $ \state ->
                 state { nodeProcesses = M.adjust f pid $ nodeProcesses state }
 
--- | Update a group Id.
+-- | Update a group.
 updateGroup :: (GroupState -> GroupState) -> GroupId ->
                St.StateT NodeState IO ()
 updateGroup f gid =
   St.modify $ \state ->
                 state { nodeGroups = M.adjust f gid $ nodeGroups state }
 
+-- | Update a remote node.
+updateRemoteNode :: (RemoteNodeState -> RemoteNodeState) -> NodeId ->
+                    St.StateT NodeState IO ()
+updateRemoteNode f nid =
+  St.modify $ \state ->
+                state { nodeRemoteNodes = M.adjust f nid $ nodeRemoteNodes nid }
+
 -- | Add a group.
 addGroup :: GroupId -> GroupState -> St.StateT NodeState IO ()
 addGroup gid group = do
   St.modify $ \state ->
                 state { nodeGroups = M.insert gid group $ nodeGroups state }
+
+-- | Register local process end listener.
+registerLocalProcessEndListener :: ProcessId -> DestId ->
+                                   St.StateT NodeState IO ()
+registerLocalProcessEndListener pid listenerId = do
+  updateProcess
+    (\process ->
+        case S.findIndexL (\(did, _) -> listenerId == did) $
+             pstateEndListeners process of
+          Just index ->
+            process { pstateEndListeners =
+                        S.adjust (\(did, count) -> (did, count + 1))
+                        index $ pstateEndListeners process }
+          Nothing ->
+            process { pstateEndListeners = pstateEndListeners process |>
+                                           S.singleton (listenerId, 1) })
+    pid
+
+-- | Register remote node end listener.
+registerRemoteNodeEndListener :: NodeId -> DestId -> St.StateT NodeState IO ()
+registerRemoteNodeEndListener nid listenerId = do
+  updateRemoteNode
+    (\rnode ->
+        case S.findIndexL (\(did, _) -> listenerId == did) $
+             rnodeEndListeners rnode of
+          Just index ->
+            rnode { rnodeEndListeners =
+                      S.adjust (\(did, count) -> (did, count + 1))
+                      index $ rnodeEndListeners rnode }
+          Nothing ->
+            rnode { rnodeEndListeners = rnodeEndListeners rnode |>
+                                        S.singleton (listenerId, 1) })
+    (pidNodeId pid)
+
+-- | Register group Id end listener.
+registerGroupEndListener :: GroupId -> DestId -> St.StateT NodeState IO ()
+registerGroupEndListener gid listenerId = do
+  updateGroup
+    (\group ->
+        case S.findIndexL (\(did, _) -> listenerId == did) $
+             groupEndListeners group of
+          Just index ->
+            group { groupEndListeners =
+                      S.adjust (\(did, count) -> (did, count + 1))
+                      index $ groupEndListeners group }
+          Nothing ->
+            group { groupEndListeners = groupEndListeners group |>
+                                        S.singleton (listenerId, 1) })
+    gid
+
+-- | Unregister local process end listener.
+unregisterLocalProcessEndListener :: ProcessId -> DestId ->
+                                     St.StateT NodeState IO ()
+unregisterLocalProcessEndListener pid listenerId = do
+  updateProcess
+    (\process ->
+       case S.findIndexL (\(did, _) -> listenerId == did) $
+            pstateEndListeners process of
+         Just index ->
+           case S.lookup index $ pstateEndListeners process of
+             Just (_, count)
+               | count > 1 ->
+                 process { pstateEndListeners =
+                             S.adjust (\(did, count) -> (did, count - 1))
+                             index $ pstateEndListeners process }
+               | True ->
+                 process { pstateEndListeners =
+                             S.deleteAt index $ pstateEndListeners process }
+             Nothing -> error "impossible"
+         Nothing -> return ())
+    pid
+
+-- | Unregister remote node end listener.
+unregisterRemoteNodeEndListener :: NodeId -> DestId -> St.StateT NodeState IO ()
+unregisterRemoteNodeEndListener nid listenerId = do
+  updateRemoteNode
+    (\rnode ->
+       case S.findIndexL (\(did, _) -> listenerId == did) $
+            rnodeEndListeners rnode of
+         Just index ->
+           case S.lookup index $ rnodeEndListeners rnode of
+             Just (_, count)
+               | count > 1 ->
+                 rnode { rnodeEndListeners =
+                             S.adjust (\(did, count) -> (did, count - 1))
+                             index $ rnodeEndListeners rnode }
+               | True ->
+                 rnode { rnodeEndListeners =
+                             S.deleteAt index $ rnodeEndListeners rnode }
+             Nothing -> error "impossible"
+         Nothing -> return ())
+    nid
+
+-- | Unregister group end listener.
+unregisterGroupEndListener :: GroupId -> DestId -> St.StateT NodeState IO ()
+unregisterGroupEndListener gid listenerId = do
+  updateGroup
+    (\group ->
+       case S.findIndexL (\(did, _) -> listenerId == did) $
+            groupEndListeners group of
+         Just index ->
+           case S.lookup index $ groupEndListeners group of
+             Just (_, count)
+               | count > 1 ->
+                 group { groupEndListeners =
+                             S.adjust (\(did, count) -> (did, count - 1))
+                             index $ groupEndListeners group }
+               | True ->
+                 group { groupEndListeners =
+                             S.deleteAt index $ groupEndListeners group }
+             Nothing -> error "impossible"
+         Nothing -> return ())
+    gid
 
 -- | Shutdown the local node.
 shutdownLocalNode :: ProcessId -> Header -> Payload -> St.StateT NodeState IO ()
@@ -794,25 +961,22 @@ runLocalCommunication selfNid output terminate = do
 -- | Connect to a local node.
 connectLocal :: Node -> St.StateT NodeState IO ()
 connectLocal node = do
-  localNodes <- findLocalNodes
   startLocalCommunication node
-  nids <- M.keys . nodeLocalNodes <$> St.get
+  nodes <- M.elems . nodeLocalNodes <$> St.get
   St.modify $ \state -> do
     state { nodeLocalNodes =
               M.insert (nodeId node) node $ nodeLocalNodes state }
-  forM_ nides $ \nid -> sendLocalMessage nid $ JoinMessage { joinNode = node }
+  forM_ nodes $ \node' -> do
+    sendLocalMessage node' $ JoinMessage { joinNode = node }
   selfNode <- nodeInfo <$> St.get
   sendLocalMessage (nodeId node) $ HelloMessage { heloNode = selfNode }
 
 -- | Connect to a local node without broadcasting join messages.
 connectLocalWithoutBroadcast :: Node -> St.StateT NodeState IO ()
 connectLocalWithoutBroadcast node = do
-  localNodes <- findLocalNodes
   startLocalCommunication node
-  nids <- M.keys . nodeLocalNodes <$> St.get
   St.modify $ \state -> do
     state { nodeLocalNodes =
               M.insert (nodeId node) node $ nodeLocalNodes state }
   selfNode <- nodeInfo <$> St.get
   sendLocalMessage (nodeId node) $ HelloMessage { heloNode = selfNode }
-  

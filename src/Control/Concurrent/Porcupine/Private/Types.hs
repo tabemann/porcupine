@@ -41,6 +41,7 @@ module Control.Concurrent.Porcupine.Private.Types
    ProcessInfo (..),
    Node (..),
    NodeState (..),
+   NodeM,
    ProcessState (..),
    GroupState (..),
    RemoteNodeState (..),
@@ -146,6 +147,9 @@ data NodeState =
               nodePendingRemoteNodes :: Seq PendingRemoteNodeState,
               nodeGroups :: HashMap GroupId GroupState }
 
+-- | A node state monad convenience type
+type NodeM a = StateT NodeState IO a
+
 -- | The process state type
 data ProcessState =
   ProcessState { pstateInfo :: ProcessInfo,
@@ -159,7 +163,8 @@ data ProcessState =
 data GroupState =
   GroupState { groupId :: GroupId,
                groupLocalSubscribers :: Seq (ProcessId, Integer),
-               groupRemoteSubscribers :: Seq (NodeId, Integer) }
+               groupRemoteSubscribers :: Seq (NodeId, Integer),
+               groupEndListeners :: Seq (DestId, Integer) }
 
 -- | The remote node state type
 data RemoteNodeState =

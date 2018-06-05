@@ -83,10 +83,16 @@ import Data.HashMap.Lazy (HashMap)
 import Text.Printf (printf)
 import Data.Binary (Binary (..))
 import Data.Word (Word8.
-                  Word16)
+                  Word16,
+                  Word32)
 import Control.Monad.Fail (fail)
 import Control.Monad.IO.Class (MonadIO (..))
 import Control.Exception.Base (SomeException)
+import Data.Hashable (Hashable(..))
+import Data.Bits (xor,
+                  complement,
+                  shift,
+                  (.|.))
 import Data.Functor ((<$>))
 
 -- | The process monad type
@@ -203,6 +209,13 @@ instance Binary ProcessId where
                                 pidRandomNum = randomNum,
                                 pidNodeId = nid }
 
+-- | The process Id Hashble instance
+instance Hashable ProcessId where
+  hashWithSalt salt pid =
+    hashWithSalt salt (pidSequenceNum pid) `xor`
+    hashWithSalt salt (pidRandomNum pid) `xor`
+    hashWithSalt salt (pidNodeId pid)
+
 -- | The node Id type
 data NodeId =
   NodeId { nidFixedNum :: Integer,
@@ -236,6 +249,15 @@ instance Binary NodeId where
            return $ NodeId { nidFixedNum = fixedNum,
                              nidRandomNum = randomNum,
                              nidAddress = maybeAddress }
+
+-- | The node Id Hashable instance
+instance Hashable NodeId where
+  hashWithSalt salt nid =
+    hashWithSalt salt (nidFixedNum nid) `xor`
+    hashWithSalt salt (nidRandomNum nid) `xor`
+    (case nidAddress of
+       Nothing -> complement salt
+       Just address -> hashWithSalt salt address)
 
 -- | The partial node Id type
 data PartialNodeId =
@@ -281,6 +303,17 @@ instance Binary PartialNodeId where
            return $ PartialNodeId { pnidFixedNum = fixedNum,
                                     pnidRandomNum = maybeRandomNum,
                                     pnidAddress = maybeAddress }
+
+-- | The partial node Id Hashable instance
+instance Hashable PartialNodeId where
+  hashWithSalt salt pnid =
+    hashWithSalt salt (pnidFixedNum pnid) `xor`
+    (case pnidRandomNum of
+       Nothing -> complement salt
+       Just randomNum -> hashWithSalt salt randomNum) `xor`
+    (case pnidAddress of
+       Nothing -> complement salt
+       Just address -> hashWithSalt salt address)
 
 -- | A new SockAddr class
 data SockAddr' = SockAddrInet' PortNumber HostAddress
@@ -371,6 +404,26 @@ instance Binary SockAddr' where
       2 -> SockAddrUnix' <$> get
       _ -> fail "invalid sockaddr serialization"
 
+-- | The SockAddr' Hashable instance
+instance Hashable SockAddr' where
+  hashWithSalt salt (SockAddrInet' port address) =
+    let (x, y, z, w) = hostAddressToTuple address
+    in hashWithSalt salt ((fromIntegral x :: Word32) .|.
+                          ((fromIntegral y :: Word32) `shift` 8) .|.
+                          ((fromIntegral z :: Word32) `shift` 16) .|.
+                          ((fromIntegral w :: Word32) `shift` 24))
+  hashWithSalt salt (SockAddrInet6' port flow address scope) =
+    let (p0, p1, p2, p3, p4, p5, p6, p7) = hostAddress6ToTuple address
+    in hashWithSalt salt ((fromIntegral p0 :: Word32) .|.
+                          ((fromIntegral p1 :: Word32) `shift` 16)) `xor`
+       hashWithSalt salt ((fromIntegral p2 :: Word32) .|.
+                          ((fromIntegral p3 :: Word32) `shift` 16)) `xor`
+       hashWithSalt salt ((fromIntegral p4 :: Word32) .|.
+                          ((fromIntegral p5 :: Word32) `shift` 16)) `xor`
+       hashWithSalt salt ((fromIntegral p6 :: Word32) .|.
+                          ((fromIntegral p7 :: Word32) `shift` 16))
+  hashWithSalt salt (SockAddrUnix' path) = hashWithSalt salt path
+
 -- | The group Id type
 data GroupId =
   GroupId { gidSequenceNum :: Integer,
@@ -390,7 +443,7 @@ instance Show GroupId where
 instance Binary GroupId where
   put gid = do put $ gidSequenceNum gid
                put $ gidRandomNum gid
-               case gidOriginalNodeId of
+               case gidOriginalNodeId gid of
                  Nothing -> put $ 0 :: Word8
                  Just nid -> do put $ 1 :: Word8
                                 put nid
@@ -404,6 +457,15 @@ instance Binary GroupId where
            return $ GroupId { gidSequenceNum = sequenceNum,
                               gidRandomNum = randomNum,
                               gidOriginalNodeId = maybeNid }
+
+-- | The group Id Hashable instance
+instance Hashable GroupId where
+  hashWithSalt salt gid =
+    hashWithSalt salt (gidSequenceNum gid) `xor`
+    hashWithSalt salt (gidRandomNum gid) `xor`
+    (case gidOriginalNodeId gid of
+       Nothing -> complement salt
+       Just nid -> hashWithSalt salt nid)
 
 -- | The message type
 data Message = UserMessage { umsgSourceId :: SourceId,
@@ -470,6 +532,14 @@ instance Binary SourceId where
                                             causeCauseId = causeId }
              _ -> fail "invalid source id serialization"
 
+-- | The group Id Hashable instance
+instance Hashable SourceId where
+  hashWithSalt salt NoSource = complement salt
+  hashWithSalt salt (NormalSource pid) = hashWithSalt salt pid
+  hashWithSalt salt CauseSource{..} =
+    complement $ hashWithSalt salt causeSourceId `xor`
+                 hashWithSalt salt causeCauseId
+
 -- | The message destination type
 data DestId = ProcessDest ProcessId
             | GroupDest GroupId
@@ -486,6 +556,11 @@ instance Binary DestId where
              0 -> ProcessDest <$> get
              1 -> GroupDest <$> get
              _ -> fail "invalid destination id serialization"
+
+-- | The message destination type Hashable instance
+instance Hashable DestId where
+  hashWithSalt salt (ProcessDest pid) = hashWithSalt salt pid
+  hashWithSalt salt (GroupDest gid) = complement $ hashWithSalt salt gid
 
 -- | The remote event type
 data RemoteEvent = RemoteReceived { recvNodeId :: NodeId,

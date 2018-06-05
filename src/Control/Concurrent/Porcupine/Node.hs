@@ -107,7 +107,7 @@ start fixedNum address key = do
                   nodeOutput = input }
 
 -- | Run a node.
-runNode :: St.StateT NodeState IO ()
+runNode :: NodeM ()
 runNode = do
   readOrder <- nodeReadOrder <$> St.get
   input <- nodeQueue . nodeInfo <$> St.get
@@ -126,7 +126,7 @@ runNode = do
     Left event -> handleRemoteEvent event
 
 -- | Handle a local message.
-handleLocalMessage :: Message -> St.StateT NodeState IO ()
+handleLocalMessage :: Message -> NodeM ()
 handleLocalMessage UserMessage{..} =
   handleLocalUserMessage umsgSourceId umsgDestId umsgHeader umsgPayload
 handleLocalMessage SpawnMessage{..} =
@@ -162,14 +162,14 @@ handleLocalMessage JoinMessage{..} =
   handleLocalJoinMessage joinNode
 
 -- | Handle a remote event.
-handleRemoteEvent :: RemoteEvent -> St.StateT NodeState IO ()
+handleRemoteEvent :: RemoteEvent -> NodeM ()
 handleRemoteEvent RemoteReceived{..} =
   handleRemoteMessage recvNodeId recvMessage
 handleRemoteDisconnected RemoteDisconnected{..} =
   handleRemoteDisconnected dconNodeId
 
 -- | Handle a remote message.
-handleRemoteMessage :: NodeID -> RemoteMessage -> St.StateT NodeState IO ()
+handleRemoteMessage :: NodeID -> RemoteMessage -> NodeM ()
 handleRemoteMessage nodeId RemoteUserMessage{..} =
   handleRemoteUserMessage nodeId rumsgSourceId rumsgDestId rumsgHeader
   rumsgPayload
@@ -198,19 +198,18 @@ handleRemoteMessage nodeId RemoteJoinMessage{..} =
   handleRemoteJoinMessage nodeId rjoinNodeId
 
 -- | Handle a remote disconnected event.
-handleRemoteDisconnected :: NodeId -> St.StateT NodeState IO ()
+handleRemoteDisconnected :: NodeId -> NodeM ()
 handleRemoteDisconnected = runNode
 
 -- | Handle a local user message.
-handleLocalUserMessage :: SourceId -> DestId -> Header -> Payload ->
-                          St.StateT NodeState IO ()
+handleLocalUserMessage :: SourceId -> DestId -> Header -> Payload -> NodeM ()
 handleLocalUserMessage sourceId destId header payload = do
   sendUserMessage destId sourceId header payload
   runNode
 
 -- | Handle a local spawn message.
 handleLocalSpawnMessage :: SourceId -> Entry -> ProcessId -> Header ->
-                           Payload -> St.StateT NodeState IO ()
+                           Payload -> NodeM ()
 handleLocalSpawnMessage sourceId entry processId header payload = do
   state <- St.get
   queue <- liftIO $ atomically newTQueue
@@ -237,8 +236,7 @@ handleLocalSpawnMessage sourceId entry processId header payload = do
   runNode
 
 -- | Handle a local quit message.
-handleLocalQuitMessage :: ProcessId -> Header -> Payload ->
-                          St.StateT NodeState IO ()
+handleLocalQuitMessage :: ProcessId -> Header -> Payload -> NodeM ()
 handleLocalQuitMessage pid header payload = do
   updateProcess (\process ->
                     if not $ pstateTerminating process
@@ -254,8 +252,7 @@ handleLocalQuitMessage pid header payload = do
   runNode
 
 -- | Handle a local end message.
-handleLocalEndMessage :: ProcessId -> Maybe SomeException ->
-                         St.StateT NodeState IO ()
+handleLocalEndMessage :: ProcessId -> Maybe SomeException -> NodeM ()
 handleLocalEndMessage processId exception = do
   removeListeners processId
   state <- St.get
@@ -280,8 +277,7 @@ handleLocalEndMessage processId exception = do
   runNode
 
 -- | Handle a local kill message.
-handleLocalKillMessage :: ProcessId -> DestId -> Header -> Payload ->
-                          St.StateT NodeState IO ()
+handleLocalKillMessage :: ProcessId -> DestId -> Header -> Payload -> NodeM ()
 handleLocalKillMessage processId destId header payload = do
   case destId of
     ProcessDest destPid -> killProcess processId destPid header payload
@@ -289,7 +285,7 @@ handleLocalKillMessage processId destId header payload = do
   runNode
 
 -- | Handle a local subscribe message.
-handleLocalSubscribeMessage :: ProcessId -> GroupId -> St.StateT NodeState IO ()
+handleLocalSubscribeMessage :: ProcessId -> GroupId -> NodeM ()
 handleLocalSubscribeMessage pid gid = do
   state <- St.get
   case M.lookup gid $ nodeGroups state of
@@ -317,8 +313,7 @@ handleLocalSubscribeMessage pid gid = do
   runNode
 
 -- | Handle a local unsubscribe message.
-handleLocalUnsubscribeMessage :: ProcessId -> GroupId ->
-                                 St.StateT NodeState IO ()
+handleLocalUnsubscribeMessage :: ProcessId -> GroupId -> NodeM ()
 handleLocalUnsubscribeMessage pid gid = do
   state <- St.get
   case M.lookup gid $ nodeGroups state of
@@ -350,14 +345,14 @@ handleLocalUnsubscribeMessage pid gid = do
   runNode
 
 -- | Handle a local assign message.
-handleLocalAssignMessage :: Name -> DestId -> St.StateT NodeState IO ()
+handleLocalAssignMessage :: Name -> DestId -> NodeM ()
 handleLocalAssignMessage name destId = do
   broadcastRemoteMessage $ RemoteAssignMessage { rassName = name,
                                                  rassDestId = destId }
   runNode
 
 -- | Handle a local unassign message.
-handleLocalUnassignMessage :: Name -> DestId -> St.StateT NodeState IO ()
+handleLocalUnassignMessage :: Name -> DestId -> NodeM ()
 handleLocalUnassignMessage name destId = do
   broadcastRemoteMessage $ RemoteUnassignMessage { ruassName = name,
                                                    ruassDestId = destId }
@@ -365,7 +360,7 @@ handleLocalUnassignMessage name destId = do
 
 -- | Handle a local shutdown message.
 handleLocalShutdownMessage :: ProcessId -> NodeId -> Header -> Payload ->
-                              St.StateT NodeState IO ()
+                              NodeM ()
 handleLocalShutdownMessage pid nid header payload = do
   nid' <- nodeId . nodeInfo <$> St.get
   if nid == nid'
@@ -377,17 +372,17 @@ handleLocalShutdownMessage pid nid header payload = do
             runNode
 
 -- | Handle a local connect message.
-handleLocalConnectMessage :: Node -> St.StateT NodeState IO ()
+handleLocalConnectMessage :: Node -> NodeM ()
 handleLocalConnectMessage node = do
   connectLocalMessage node
   runNode
 
 -- | Handle a local connect remote message.
-handleLocalConnectRemoteMessage :: NodeId -> Key -> St.StateT NodeState IO ()
+handleLocalConnectRemoteMessage :: NodeId -> Key -> NodeM ()
 handleLocalConnectRemoteMessage nid key = runNode
 
 -- | Handle a local listen end message.
-handleLocalListenEndMessage :: DestId -> DestId -> St.StateT NodeState IO ()
+handleLocalListenEndMessage :: DestId -> DestId -> NodeM ()
 handleLocalListenEndMessage listenedId listenerId = do
   case listenedId of
     ProcessDest pid -> do
@@ -407,7 +402,7 @@ handleLocalListenEndMessage listenedId listenerId = do
   runNode
 
 -- | handle a local unlisten end message.
-handleLocalUnlistenEndMessage :: DestId -> DestId -> St.StateT NodeState IO ()
+handleLocalUnlistenEndMessage :: DestId -> DestId -> NodeM ()
 handleLocalUnlistenEndMessage listenedId listenerId = do
   case listenedId of
     ProcessDest pid -> do
@@ -427,7 +422,7 @@ handleLocalUnlistenEndMessage listenedId listenerId = do
   runNode
 
 -- | Handle a local hello message.
-handleLocalHelloMessage :: Node -> St.StateT NodeState IO ()
+handleLocalHelloMessage :: Node -> NodeM ()
 handleLocalHelloMessage node = do
   state <- St.get
   case M.lookup (nodeId node) $ nodeLocalNodes state of
@@ -436,7 +431,7 @@ handleLocalHelloMessage node = do
   runNode
 
 -- | Handle a local join message.
-handleLocalJoinMessage :: Node -> St.StateT NodeState IO ()
+handleLocalJoinMessage :: Node -> NodeM ()
 handleLocalJoinMessage node = do
   state <- St.get
   case M.lookup (nodeId node) $ nodeLocalNodes state of
@@ -446,17 +441,17 @@ handleLocalJoinMessage node = do
 
 -- | Handle a remote user message.
 handleRemoteUserMessage :: NodeId -> SourceId -> DestId -> Header -> Payload ->
-                           St.StateT NodeState IO ()
+                           NodeM ()
 handleRemoteUserMessage nid sourceId destId header payload = runNode
 
 -- | Handle a remote process end message.
 handleRemoteEndMessage :: NodeId -> SourceId -> Header -> Payload ->
-                          St.StateT NodeState IO ()
+                          NodeM ()
 handleRemoteEndMessage nid sourceId header payload = runNode
 
 -- | Handle a remote kill message.
 handleRemoteKillMessage :: NodeId -> SourceId -> DestId -> Header -> Payload ->
-                           St.StateT NodeState IO ()
+                           NodeM ()
 handleRemoteKillMessage nid processId destId header payload =
   case destId of
     ProcessDest destPid -> killLocalProcess processId destPid header payload
@@ -464,8 +459,7 @@ handleRemoteKillMessage nid processId destId header payload =
   runNode
 
 -- | Handle a remote subscribe message.
-handleRemoteSubscribeMessage :: NodeId -> ProcessId -> GroupId ->
-                                St.StateT NodeState IO ()
+handleRemoteSubscribeMessage :: NodeId -> ProcessId -> GroupId -> NodeM ()
 handleRemoteSubscribeMessage nid _ gid = do
   state <- St.get
   case M.lookup gid $ nodeGroups state of
@@ -490,8 +484,7 @@ handleRemoteSubscribeMessage nid _ gid = do
   runNode
 
 -- | Handle a remote unsubscribe message.
-handleRemoteUnsubscribeMessage :: NodeId -> ProcessId -> GroupId ->
-                                  St.StateT NodeState IO ()
+handleRemoteUnsubscribeMessage :: NodeId -> ProcessId -> GroupId -> NodeM ()
 handleRemoteUnsubscribeMessage nid _ gid = do
   state <- St.get
   case M.lookup gid $ nodeGroups state of
@@ -521,8 +514,7 @@ handleRemoteUnsubscribeMessage nid _ gid = do
   runNode
 
 -- | Handle a remote assign message.
-handleRemoteAssignMessage :: NodeId -> Name -> DestId ->
-                             St.StateT NodeState IO ()
+handleRemoteAssignMessage :: NodeId -> Name -> DestId -> NodeM ()
 handleRemoteAssignMessage _ name destId = do
   names <- nodeNames . nodeInfo <$> St.get
   liftIO . atomically $ do
@@ -531,8 +523,7 @@ handleRemoteAssignMessage _ name destId = do
   runNode
 
 -- | Handle a remote unassign message.
-handleRemoteUnassignMessage :: NodeId -> Name -> DestId ->
-                               St.StateT NodeState IO ()
+handleRemoteUnassignMessage :: NodeId -> Name -> DestId -> NodeM ()
 handleRemoteUnassignMessage _ name destId = do
   names <- nodeNames . nodeInfo <$> St.get
   liftIO . atomically $ do
@@ -542,17 +533,16 @@ handleRemoteUnassignMessage _ name destId = do
 
 -- | Handle a remote shutdown message.
 handleRemoteShutdownMessage :: NodeId -> ProcessId -> Header -> Payload ->
-                               St.StateT NodeState IO ()
+                               NodeM ()
 handleRemoteShutdownMessage nid pid header payload =
   shutdownLocalNode pid header payload
 
 -- | Handle a remote hello message.
-handleRemoteHelloMessage :: NodeId -> NodeId -> Key -> St.StateT NodeState IO ()
+handleRemoteHelloMessage :: NodeId -> NodeId -> Key -> NodeM ()
 handleRemoteHelloMessage nid nid' key = runNode
 
 -- | Handle a remote listen end message.
-handleRemoteListenEndMessage :: NodeId -> DestId -> DestId ->
-                                St.StateT NodeState IO ()
+handleRemoteListenEndMessage :: NodeId -> DestId -> DestId -> NodeM ()
 handleRemoteListenEndMessage nid listenedId listenerId = do
   case listenedId of
     ProcessDest pid -> do
@@ -564,8 +554,7 @@ handleRemoteListenEndMessage nid listenedId listenerId = do
   runNode
 
 -- | Handle a remote unlisten end message.
-handleRemoteUnlistenEndMessage :: NodeId -> DestId -> DestId ->
-                                  St.StateT NodeState IO ()
+handleRemoteUnlistenEndMessage :: NodeId -> DestId -> DestId -> NodeM ()
 handleRemoteUnlistenEndMessage nid listenedId listenerId = do
   case listenedId of
     ProcessDest pid -> do
@@ -577,12 +566,11 @@ handleRemoteUnlistenEndMessage nid listenedId listenerId = do
   runNode
 
 -- | Handle a remote join message.
-handleRemoteJoinMessage :: NodeId -> NodeId -> St.StateT NodeState IO ()
+handleRemoteJoinMessage :: NodeId -> NodeId -> NodeM ()
 handleRemoteJoinMessage nid remoteNid = runNode
 
 -- | Send a user message to a process.
-sendUserMessageToProcess :: DestId -> SourceId -> Header -> Payload ->
-                            St.StateT NodeState IO ()
+sendUserMessage :: DestId -> SourceId -> Header -> Payload -> NodeM ()
 sendUserMessage destId sourceId header payload = do
   state <- St.get
   case destId of
@@ -622,12 +610,12 @@ sendUserMessage destId sourceId header payload = do
                                   rumsgHeader = header,
                                   rumsgPayload = payload }
 -- | Send a locall message.
-sendLocalMessage :: Node -> Message -> St.StateT NodeState IO ()
+sendLocalMessage :: Node -> Message -> NodeM ()
 sendLocalMessage node message = do
   liftIO . atomically $ writeTQueue (nodeQueue node) message
 
 -- | Send a remote message.
-sendRemoteMessage :: NodeId -> RemoteMessage -> St.StateT NodeState IO ()
+sendRemoteMessage :: NodeId -> RemoteMessage -> NodeM ()
 sendRemoteMessage nid message = do
   state <- St.get
   case M.lookup nid $ nodeRemoteNodes state of
@@ -646,7 +634,7 @@ sendRemoteMessage nid message = do
         Nothing -> return ()
 
 -- | Broadcast a remote message.
-broadcastRemoteMessage :: RemoteMessage -> St.StateT NodeState IO ()
+broadcastRemoteMessage :: RemoteMessage -> NodeM ()
 broadcastRemoteMessage message = do
   state <- St.get
   forM_ (nodeRemoteNodes state) $ \rnode ->
@@ -655,7 +643,7 @@ broadcastRemoteMessage message = do
     liftIO . atomically $ writeTQueue (prnodeOutput pnode) message
 
 -- | Remove listeners for a process Id
-removeListeners :: ProcessId -> St.StateT NodeState IO ()
+removeListeners :: ProcessId -> NodeM ()
 removeListeners processId = do
   St.modify $ \state -> state {
     nodeGroups =
@@ -689,14 +677,13 @@ removeListeners processId = do
         in pnode { prnodeEndListeners = endListeners } }
 
 -- | Remove a process
-removeProcess :: ProcessId -> St.StateT NodeState IO ()
+removeProcess :: ProcessId -> NodeM ()
 removeProcess processId = do
   St.modify $ \state ->
     state { nodeProcesses = M.delete processId nodeProcesses }
 
 -- | Send message to all end listeners of a process
-sendEndMessageForProcess :: ProcessState -> Maybe (Header, Payload) ->
-                            St.StateT NodeState IO ()
+sendEndMessageForProcess :: ProcessState -> Maybe (Header, Payload) -> NodeM ()
 sendEndMessageForProcess process message = do
   let (header, payload) =
         case pstateEndMessage process of
@@ -705,18 +692,25 @@ sendEndMessageForProcess process message = do
             case message of
               Just message -> message
               Nothing -> (encode $ "genericEnd" :: T.Text, BS.empty)
+      pid = procId $ pstateInfo process
       sourceId =
         case pstateEndCause process of
           Just causeId ->
-            CauseSource { causeSourceId = procId $ pstateInfo process,
+            CauseSource { causeSourceId = pid,
                           causeCauseId = causeId }
-          Nothing -> NormalSource . procId $ pstateInfo process
+          Nothing -> NormalSource pid
   forM_ (pstateEndListeners process) $ \(did, _) ->
     sendUserMessage did sourceId header payload
+  groups <- M.elems . nodeGroups <$> St.get
+  forM_ groups $ \group -> do
+    case findIndexL (\(pid', _) -> pid == pid') $ groupLocalSubscribers group of
+      Just _ -> do
+        for (groupEndListeners group) $ \(did, _) ->
+          sendUserMessage did sourceId header payload
+      Nothing -> return ()
 
 -- | Kill a process.
-killProcess :: ProcessId -> ProcessId -> Header -> Payload ->
-               St.StateT NodeState IO ()
+killProcess :: ProcessId -> ProcessId -> Header -> Payload -> NodeM ()
 killProcess pid targetPid header payload = do
   node <- nodeInfo <$> St.get
   if pidNodeId processId == nodeId node
@@ -728,8 +722,7 @@ killProcess pid targetPid header payload = do
                              rkillPayload = payload }
 
 -- | Kill a local process.
-killLocalProcess :: ProcessId -> ProcessId -> Header -> Payload ->
-                    St.StateT NodeState IO ()
+killLocalProcess :: ProcessId -> ProcessId -> Header -> Payload -> NodeM ()
 killLocalProcess sourcePid destPid header payload = do
   state <- St.get
   case M.lookup destPid $ nodeProcesses state of
@@ -750,8 +743,7 @@ killLocalProcess sourcePid destPid header payload = do
     Nothing -> return ()
 
 -- | Kill a group.
-killGroup :: SourceId -> GroupId -> Header -> Payload ->
-             St.StateT NodeState IO ()
+killGroup :: SourceId -> GroupId -> Header -> Payload -> NodeM ()
 killGroup sourcePid destGid header payload = do
   state <- St.get
   case M.lookup destGid $ nodeGroups state of
@@ -767,8 +759,7 @@ killGroup sourcePid destGid header payload = do
     Nothing -> return ()
 
 -- | Kill a group in response to a remote message.
-killGroupForRemote :: SourceId -> GroupId -> Header -> Payload ->
-                      St.StateT NodeState IO ()
+killGroupForRemote :: SourceId -> GroupId -> Header -> Payload -> NodeM ()
 killGroupForRemote sourceId gid header payload = do
   state <- St.get
   case M.lookup destGid $ nodeGroups state of
@@ -778,35 +769,31 @@ killGroupForRemote sourceId gid header payload = do
     Nothing -> return ()
 
 -- | Update a process.
-updateProcess :: (ProcessState -> ProcessState) -> ProcessId ->
-                 St.StateT NodeState IO ()
+updateProcess :: (ProcessState -> ProcessState) -> ProcessId -> NodeM ()
 updateProcess f pid =
   St.modify $ \state ->
                 state { nodeProcesses = M.adjust f pid $ nodeProcesses state }
 
 -- | Update a group.
-updateGroup :: (GroupState -> GroupState) -> GroupId ->
-               St.StateT NodeState IO ()
+updateGroup :: (GroupState -> GroupState) -> GroupId -> NodeM ()
 updateGroup f gid =
   St.modify $ \state ->
                 state { nodeGroups = M.adjust f gid $ nodeGroups state }
 
 -- | Update a remote node.
-updateRemoteNode :: (RemoteNodeState -> RemoteNodeState) -> NodeId ->
-                    St.StateT NodeState IO ()
+updateRemoteNode :: (RemoteNodeState -> RemoteNodeState) -> NodeId -> NodeM ()
 updateRemoteNode f nid =
   St.modify $ \state ->
                 state { nodeRemoteNodes = M.adjust f nid $ nodeRemoteNodes nid }
 
 -- | Add a group.
-addGroup :: GroupId -> GroupState -> St.StateT NodeState IO ()
+addGroup :: GroupId -> GroupState -> NodeM ()
 addGroup gid group = do
   St.modify $ \state ->
                 state { nodeGroups = M.insert gid group $ nodeGroups state }
 
 -- | Register local process end listener.
-registerLocalProcessEndListener :: ProcessId -> DestId ->
-                                   St.StateT NodeState IO ()
+registerLocalProcessEndListener :: ProcessId -> DestId -> NodeM ()
 registerLocalProcessEndListener pid listenerId = do
   updateProcess
     (\process ->
@@ -822,7 +809,7 @@ registerLocalProcessEndListener pid listenerId = do
     pid
 
 -- | Register remote node end listener.
-registerRemoteNodeEndListener :: NodeId -> DestId -> St.StateT NodeState IO ()
+registerRemoteNodeEndListener :: NodeId -> DestId -> NodeM ()
 registerRemoteNodeEndListener nid listenerId = do
   updateRemoteNode
     (\rnode ->
@@ -838,7 +825,7 @@ registerRemoteNodeEndListener nid listenerId = do
     (pidNodeId pid)
 
 -- | Register group Id end listener.
-registerGroupEndListener :: GroupId -> DestId -> St.StateT NodeState IO ()
+registerGroupEndListener :: GroupId -> DestId -> NodeM ()
 registerGroupEndListener gid listenerId = do
   updateGroup
     (\group ->
@@ -854,8 +841,7 @@ registerGroupEndListener gid listenerId = do
     gid
 
 -- | Unregister local process end listener.
-unregisterLocalProcessEndListener :: ProcessId -> DestId ->
-                                     St.StateT NodeState IO ()
+unregisterLocalProcessEndListener :: ProcessId -> DestId -> NodeM ()
 unregisterLocalProcessEndListener pid listenerId = do
   updateProcess
     (\process ->
@@ -876,7 +862,7 @@ unregisterLocalProcessEndListener pid listenerId = do
     pid
 
 -- | Unregister remote node end listener.
-unregisterRemoteNodeEndListener :: NodeId -> DestId -> St.StateT NodeState IO ()
+unregisterRemoteNodeEndListener :: NodeId -> DestId -> NodeM ()
 unregisterRemoteNodeEndListener nid listenerId = do
   updateRemoteNode
     (\rnode ->
@@ -897,7 +883,7 @@ unregisterRemoteNodeEndListener nid listenerId = do
     nid
 
 -- | Unregister group end listener.
-unregisterGroupEndListener :: GroupId -> DestId -> St.StateT NodeState IO ()
+unregisterGroupEndListener :: GroupId -> DestId -> NodeM ()
 unregisterGroupEndListener gid listenerId = do
   updateGroup
     (\group ->
@@ -918,7 +904,7 @@ unregisterGroupEndListener gid listenerId = do
     gid
 
 -- | Shutdown the local node.
-shutdownLocalNode :: ProcessId -> Header -> Payload -> St.StateT NodeState IO ()
+shutdownLocalNode :: ProcessId -> Header -> Payload -> NodeM ()
 shutdownLocalNode pid header payload = do
   state <- St.get
   broadcastRemoteMessage RemoteLeaveMessage
@@ -928,7 +914,7 @@ shutdownLocalNode pid header payload = do
   St.modify $ \state -> state { nodeRemoteNodes = S.empty }
   
 -- | Start local communication with another node.
-startLocalCommunication :: Node -> St.State NodeState IO ()
+startLocalCommunication :: Node -> NodeM ()
 startLocalCommunication node = do
   output <- liftIO $ atomically newTQueue
   terminate <- liftIO $ atomically newEmptyTMVar
@@ -959,7 +945,7 @@ runLocalCommunication selfNid output terminate = do
         RemoteDisconnected { dconNodeId = selfNid }
              
 -- | Connect to a local node.
-connectLocal :: Node -> St.StateT NodeState IO ()
+connectLocal :: Node -> NodeM ()
 connectLocal node = do
   startLocalCommunication node
   nodes <- M.elems . nodeLocalNodes <$> St.get
@@ -972,7 +958,7 @@ connectLocal node = do
   sendLocalMessage (nodeId node) $ HelloMessage { heloNode = selfNode }
 
 -- | Connect to a local node without broadcasting join messages.
-connectLocalWithoutBroadcast :: Node -> St.StateT NodeState IO ()
+connectLocalWithoutBroadcast :: Node -> NodeM ()
 connectLocalWithoutBroadcast node = do
   startLocalCommunication node
   St.modify $ \state -> do

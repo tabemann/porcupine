@@ -66,7 +66,8 @@ import Data.Sequence (Seq)
 import Control.Concurrent.STM (TVar)
 import Control.Concurrent.STM.TQueue (TQueue)
 import Control.Concurrent.STM.TMVar (TMVar)
-import Network.Socket (SockAddr (..),
+import Network.Socket (Socket,
+                       SockAddr (..),
                        PortNumber,
                        HostAddress,
                        FlowInfo,
@@ -183,6 +184,7 @@ data RemoteNodeState =
 data PendingRemoteNodeState =
   PendingRemoteNodeState { prnodeId :: PartialNodeId,
                            prnodeOutput :: TQueue RemoteMessage,
+                           prnodeTerminate :: TMVar (),
                            prnodeEndListeners :: Seq (DestId, Integer) }
 
 -- | The process Id type
@@ -563,7 +565,9 @@ instance Hashable DestId where
   hashWithSalt salt (GroupDest gid) = complement $ hashWithSalt salt gid
 
 -- | The remote event type
-data RemoteEvent = RemoteReceived { recvNodeId :: NodeId,
+data RemoteEvent = RemoteConnected { rconNodeId :: NodeId,
+                                     rconSocket :: Socket }
+                 | RemoteReceived { recvNodeId :: NodeId,
                                     recvMessage :: RemoteMessage }
                  | RemoteDisconnected { dconNodeId :: NodeId }
                  deriving (Eq, Ord)

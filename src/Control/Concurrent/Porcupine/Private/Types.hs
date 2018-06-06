@@ -566,7 +566,8 @@ instance Hashable DestId where
 
 -- | The remote event type
 data RemoteEvent = RemoteConnected { rconNodeId :: NodeId,
-                                     rconSocket :: Socket }
+                                     rconSocket :: Socket,
+                                     rconBuffer :: ByteString }
                  | RemoteReceived { recvNodeId :: NodeId,
                                     recvMessage :: RemoteMessage }
                  | RemoteDisconnected { dconNodeId :: NodeId }
@@ -603,6 +604,7 @@ data RemoteMessage = RemoteUserMessage { rumsgSourceId :: SourceId,
                                                 rulendListenerId :: DestId }
                    | RemoteJoinMessage { rjoinNodeId :: NodeId }
                    | RemoteLeaveMessage
+                   | RemotePartMessage { rpartNodeId :: NodeId }
                    deriving (Eq, Ord)
 
 -- | The remote message type Binary instance
@@ -662,6 +664,9 @@ instance Binary RemoteMessage where
     put rjoinNodeId
   put RemoteLeaveMessage = do
     put $ 12 :: Word8
+  put RemotePartMessage = do
+    put $ 13 :: Word8
+    put rpartNodeId
   get = do
     select <- get :: Get Word8
     case select of
@@ -736,4 +741,7 @@ instance Binary RemoteMessage where
         nid <- get
         return $ RemoteJoinMessage { rjoinNodeId = nid }
       12 -> return RemoteLeaveMessage
+      13 -> do
+        nid <- get
+        return $ RemotePartMessage { rpartNodeId = nid }
       _ -> fail "invalid remote message serialization"

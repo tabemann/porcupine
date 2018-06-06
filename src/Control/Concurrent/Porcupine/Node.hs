@@ -170,7 +170,7 @@ handleLocalMessage JoinMessage{..} =
 -- | Handle a remote event.
 handleRemoteEvent :: RemoteEvent -> NodeM ()
 handleRemoteEvent RemoteConnected{..} =
-  handleRemoteConnected rconNodeId
+  handleRemoteConnected rconNodeId rconNodeId rconBuffer
 handleRemoteEvent RemoteReceived{..} =
   handleRemoteMessage recvNodeId recvMessage
 handleRemoteDisconnected RemoteDisconnected{..} =
@@ -206,8 +206,8 @@ handleRemoteMessage nodeId RemoteJoinMessage{..} =
   handleRemoteJoinMessage nodeId rjoinNodeId
 
 -- | Handle a remote connected event.
-handleRemoteConnected :: NodeId -> NS.Socket -> NodeM ()
-handleRemoteConnected nid sock = do
+handleRemoteConnected :: NodeId -> NS.Socket -> BS.ByteString -> NodeM ()
+handleRemoteConnected nid sock buffer = do
   pnode <- findPendingRemoteNode nid
   case pnode of
     Just pnode -> do
@@ -235,7 +235,7 @@ handleRemoteConnected nid sock = do
                                       rnodeEndListeners = S.empty }
         in state { nodeRemoteNodes =
                      M.insert nid rnode $ nodeRemoteNodes state }
-      runSocket nid output terminate socket
+  runSocket nid output terminate socket buffer
   runNode
       
 -- | Handle a remote disconnected event.
@@ -1040,8 +1040,9 @@ findPendingRemoteNode nid = do
     Nothing -> return Nothing
 
 -- | Run a socket.
-runSocket :: NodeId -> TQueue RemoteMessage -> TMVar () -> NS.Socket -> NodeM ()
-runSocket nid output terminate socket = do
+runSocket :: NodeId -> TQueue RemoteMessage -> TMVar () -> NS.Socket ->
+             BS.ByteString -> NodeM ()
+runSocket nid output terminate socket buffer = do
   terminateOutput <- liftIO $ atomically newEmptyTMVar
   finalizeInput <- liftIO $ atomically newEmptyTMVar
   finalizeOutput <- liftIO $ atomically newEmptyTMVar
@@ -1055,14 +1056,14 @@ runSocket nid output terminate socket = do
       takeTMVar finalizeOutput
     NS.close socket
   input <- nodeRemoteQueue . nodeInfo <$> St.get
-  async $ runSocketInput nid input terminateOutput finalizeInput socket
+  async $ runSocketInput nid input terminateOutput finalizeInput socket buffer
   async $ runSocketOutput nid output terminateOutput finalizeOutput socket
 
 -- | Run socket input.
 runSocketInput :: NodeId -> TQueue RemoteEvent -> TMVar () -> TMVar () ->
-                  NS.Socket -> IO ()
-runSocketInput nid input terminate finalize socket = do
-  catch (runsocketInput' nid input socket BS.empty)
+                  NS.Socket -> ByteString -> IO ()
+runSocketInput nid input terminate finalize socket buffer = do
+  catch (runsocketInput' nid input socket buffer)
     (\e -> const (return ()) (e :: IOException))
   atomically $ do
     writeTQueue input $ RemoteDisconnected { dconNodeId = nid }

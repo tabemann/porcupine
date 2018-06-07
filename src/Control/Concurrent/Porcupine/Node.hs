@@ -83,7 +83,7 @@ import Data.Functor ((<$>),
                      fmap))
 
 -- | Start a node with a given fixed index, optional address, and optional key.
-start :: Integer -> Maybe NS.SockAddr -> Maybe ByteString -> IO Node
+start :: Integer -> Maybe NS.SockAddr -> Key -> IO Node
 start fixedNum address key = do
   gen <- R.newStdGen
   (randomNum, gen') <- R.random gen
@@ -95,6 +95,7 @@ start fixedNum address key = do
   names <- atomically $ newTVar M.empty
   gen'' <- atomically $ newTVar gen'
   nextSequenceNum <- atomically $ newTVar 0
+  terminate <- atomically newEmptyTMVar
   let info = Node { nodeId = nid,
                     nodeQueue = queue,
                     nodeRemoteQueue = remoteQueue,
@@ -104,11 +105,15 @@ start fixedNum address key = do
       nodeState = NodeState { nodeInfo = info,
                               nodeKey = key,
                               nodeReadOrder = False,
+                              nodeTerminate = terminate,
                               nodeProcesses = S.empty,
                               nodeRemoteNodes = M.empty,
                               nodePendingRemoteNodes = S.empty
                               nodeGroups = S.empty }
   async $ St.runStateT runNode nodeState >> return ()
+  case address of
+    Just _ -> startListen nid address remoteQueue terminate key
+    Nothing -> return ()
   return $ Node { nodeId = nid,
                   nodeOutput = input }
 
@@ -171,6 +176,8 @@ handleLocalMessage JoinMessage{..} =
 handleRemoteEvent :: RemoteEvent -> NodeM ()
 handleRemoteEvent RemoteConnected{..} =
   handleRemoteConnected rconNodeId rconNodeId rconBuffer
+handleRemoteEvent RemoteConnectFailed{..} =
+  handleRemoteConnectFailed rcflNodeId
 handleRemoteEvent RemoteReceived{..} =
   handleRemoteMessage recvNodeId recvMessage
 handleRemoteDisconnected RemoteDisconnected{..} =
@@ -209,6 +216,7 @@ handleRemoteMessage nodeId RemoteJoinMessage{..} =
 handleRemoteConnected :: NodeId -> NS.Socket -> BS.ByteString -> NodeM ()
 handleRemoteConnected nid sock buffer = do
   pnode <- findPendingRemoteNode nid
+  terminate <- nodeTerminate <$> St.get
   case pnode of
     Just pnode -> do
       St.modify $ \state ->
@@ -227,7 +235,6 @@ handleRemoteConnected nid sock buffer = do
         RemoteJoinMessage { rjoinNodeId = nid }
     Nothing -> do
       output <- liftIO $ atomically newTQueue
-      terminate <- liftIO $ atomically newEmptyTMVar
       St.modify $ \state ->
         let rnode = RemoteNodeState { rnodeId = nid,
                                       rnodeOutput = output,
@@ -237,10 +244,39 @@ handleRemoteConnected nid sock buffer = do
                      M.insert nid rnode $ nodeRemoteNodes state }
   runSocket nid output terminate socket buffer
   runNode
-      
+
+-- | Handle a remote connect failed event.
+handleRemoteConnectFailed :: PartialNodeId -> NodeM ()
+handleRemoteConnectFailed pnid = do
+  pnodes <-nodePendingRemoteNodes <$> St.get
+  let header = B.encode $ "remoteConnectFailed" :: T.Text
+      payload = B.encode $ UserRemoteConnectFailed { urcfNodeId = pnid }
+  forM_ pnodes $ \pnode ->
+    if prnodeId pnode == pnid
+    then do
+      forM_ (prnodeEndListeners pnode) $ \(did, _) ->
+        sendUserMessage did NoSource header payload
+    else return ()
+  St.modify $ \state ->
+    state { nodePendingRemoteNodes =
+              S.filter (\pnode -> prnodeId pnode /= pnid) $
+              nodePendingRemoteNodes state }
+  runNode
+
 -- | Handle a remote disconnected event.
 handleRemoteDisconnected :: NodeId -> NodeM ()
-handleRemoteDisconnected = runNode
+handleRemoteDisconnected nid = do
+  rnodes <- nodeRemoteNodes <$> St.get
+  let header = B.encode $ "remoteDisconnected" :: T.Text
+      payload = B.encode $ UserRemoteDisconnected  { urdcNodeId = nid }
+  case S.lookup nid rnodes of
+    Just rnode -> do
+      forM_ (rnodeEndListeners rnode) $ \(did, _) ->
+        sendUserMessage did NoSource header payload
+      St.modify $ \state ->
+        state { nodeRemoteNodes = M.delete nid $ nodeRemoteNodes state }
+    Nothing -> return ()
+  runNode
 
 -- | Handle a local user message.
 handleLocalUserMessage :: SourceId -> DestId -> Header -> Payload -> NodeM ()
@@ -960,11 +996,9 @@ unregisterGroupEndListener gid listenerId = do
 -- | Shutdown the local node.
 shutdownLocalNode :: ProcessId -> Header -> Payload -> NodeM ()
 shutdownLocalNode pid header payload = do
-  state <- St.get
+  terminate <- nodeTerminate <$> St.get
   broadcastRemoteMessage RemoteLeaveMessage
-  liftIO . atomically $ do
-    forM_ (M.elems $ nodeRemoteNodes state) $ \node ->
-      putTMVar (rnodeTerminate node) ()
+  liftIO . atomically $ putTMVar terminate ()
   St.modify $ \state -> state { nodeRemoteNodes = S.empty }
   
 -- | Start local communication with another node.
@@ -1119,3 +1153,156 @@ runSocketOutput nid input terminate finalize socket = do
                 atomically $ putTMVar finalize ()
     Left () -> do NS.shutdown socket NS.ShutdownBoth
                   atomically $ putTMVar finalize ()
+
+-- | Handshake with socket.
+handshakeWithSocket :: NodeId -> TQueue RemoteEvent -> TMVar () -> NS.Socket ->
+                       Key -> Maybe PartialNodeId -> IO ()
+handshakeWithSocket nid remoteQueue terminate socket key pnid = do
+  async $ do
+    success <- atomically newTMVar
+    doneShuttingDown <- atomically newTMVar
+    async $ do
+      result <- atomically $ (Right <$> readTMVar success) `orElse`
+                             (Left <$> readTMVar terminate)
+      case result of
+        Right () -> return ()
+        Left () -> do NS.shutdown socket NS.ShutdownBoth
+                      atomically $ putTMVar doneShuttingDown ()
+    let messageData = B.encode $ RemoteHelloMessage { rheloNodeId = nid,
+                                                      rheloKey = key }
+        messageLengthField = B.encode $ BS.length messageData
+        fullMessageData = BS.append messageLengthField messageData
+    continue <- catch (do NSB.sendAll socket $ BS.toStrict fullMessageData
+                          return True)
+                (\e -> const (return False) (e :: IOException))
+    if continue
+      then handshakeWithSocket' nid remoteQueue terminate socket key BS.empty
+           pnid success
+      else do
+        (atomically $ tryPutTMVar terminate ()) >> return ()
+        atomically $ readTMVar doneShuttingDown
+        NS.close socket
+        notifyHandshakeFailure remoteQueue pnid
+
+-- | Receive the hello message length during handshaking.
+handshakeWithSocket' :: NodeId -> TQueue RemoteEvent -> TMVar () -> NS.Socket ->
+                        Key -> BS.ByteString -> Maybe PartialNodeId ->
+                        TMVar () -> IO ()
+handshakeWithSocket' nid remoteQueue terminate socket key buffer pnid
+  success = do
+  continue <- (== Nothing) <$> atomically $ tryReadTMVar terminate
+  if continue
+    then
+      if BS.length buffer < 8
+      then do
+        block <- catch (Just <$> NSB.recv socket 4096)
+                 (\e -> const Nothing (e :: IOException))
+        case block of
+          Just block
+            | not $ BS.null block ->
+              handshakeWithSocket' nid remoteQueue terminate socket key
+                (BS.append buffer block) pnid success
+          _ -> do
+            (atomically $ tryPutTMVar terminate ()) >> return ()
+            atomically $ readTMVar doneShuttingDown
+            NS.close socket
+            notifyHandshakeFailure remoteQueue pnid
+      else let (lengthField, rest) = BS.splitAt 8 buffer
+           in handshakeWithSocket'' nid remoteQueue terminate socket key buffer
+                (B.decode lengthField :: Int64) pnid success
+    else do
+      atomically $ readTMVar doneShuttingDown
+      NS.close socket
+      notifyHandshakeFailure remoteQueue pnid
+
+-- | Complete receiving the hello message during handshaking.
+handshakeWithSocket'' :: NodeId -> TQueue RemoteEvent -> TMVar () ->
+                         NS.Socket -> Key -> BS.ByteString -> Int64 ->
+                         Maybe PartialNodeId -> TMVar () -> IO ()
+handshakeWithSocket'' nid remoteQueue terminate socket key buffer
+  messageLength pnid success = do
+  continue <- (== Nothing) <$> atomically $ tryReadTMVar terminate
+  if continue
+    then
+      if BS.length buffer < messageLength
+      then do
+        block <- catch (Just <$> NSB.recv socket 4096)
+                 (\e -> const Nothing (e :: IOException))
+        case block of
+          Just block
+            | not $ BS.null block ->
+              handshakeWithSocket'' nid remoteQueue terminate socket key
+                (BS.append buffer block) messageLength
+          _ -> do
+            (atomically $ tryPutTMVar terminate ()) >> return ()
+            atomically $ readTMVar doneShuttingDown
+            NS.close socket
+            notifyHandshakeFailure remoteQueue pnid
+      else let (messageData, rest) = BS.splitAt messageLength buffer
+               message = B.decode messageData :: RemoteMessage
+           in case message of
+                RemoteHelloMessage{..}
+                  | rheloKey == key -> do
+                      atomically $ do
+                        writeQueue remoteQueue $
+                          RemoteConnected { rconNodeId = rheloNodeId message,
+                                            rconSocket = socket,
+                                            rconBuffer = rest }
+                          putTMVar success ()
+                _ -> do
+                  (atomically $ tryPutTMVar terminate ()) >> return ()
+                  atomically $ readTMVar doneShuttingDown
+                  NS.close socket
+                  notifyHandshakeFailure remoteQueue pnid
+    else do
+      atomically $ readTMVar doneShuttingDown
+      NS.close socket
+      notifyHandshakeFailure remoteQueue pnid
+
+-- | Notify failure if partial node ID is present.
+notifyHandshakeFailure :: TQueue RemoteEvent -> Maybe PartialNodeId -> IO ()
+notifyHandshakeFailure remoteQueue (Just pnid) = do
+  atomically . writeTQueue remoteQueue $
+    RemoteConnectFailed { rcflNodeId = pnid }
+notifyHandshakeFailure _ Nothing = return ()
+
+-- | Start listening for incoming connections
+startListen :: NodeId -> SockAddr -> TQueue RemoteEvent -> TMVar () -> Key ->
+               IO ()
+startListen nid address remoteQueue terminate key = do
+  let family = case address of
+        NS.SockAddrInet _ _ -> NS.AF_INET
+        NS.SockAddrInet6 _ _ _ _ -> NS.AF_INET6
+        NS.SockAddrUnix _ -> NS.AF_UNIX
+        _ -> error "not supported"
+  socket <- NS.socket family NS.Stream NS.defaultProtocol
+  NS.bind socket address
+  NS.listen socket 5
+  doneShuttingDown <- atomically newEmptyTMVar
+  async $ do
+    (atomically $ readTMVar terminate) >> return ()
+    NS.shutdown socket NS.ShutdownBoth
+    atomically $ putTMVar doneShuttingDown ()
+  async $ runListen nid remoteQueue socket terminate doneShuttingDown key
+
+-- | Run listening for incoming connections.
+runListen :: NodeId -> TQueue RemoteEvent -> NS.Socket -> TMVar () ->
+             TMVar () -> Key -> IO ()
+runListen nid remoteQueue socket terminate doneShuttingDown key = do
+  continue <- (== Nothing) <$> (atomically $ tryReadTMVar terminate)
+  if continue
+    then do
+      result <- catch (Just <$> NS.accept socket)
+                (\e -> const Nothing (e :: IOException))
+      case result of
+        Just (socket', _) -> do
+          handshakeWithSocket nid remoteQueue socket' terminate key Nothing
+          runListen nid remoteQueue socket terminate doneShuttingDown key
+        Nothing -> do
+          (atomically $ tryPutTMVar terminate ()) >> return ()
+          atomically $ readTMVar doneShuttingDown
+          NS.close socket
+    else do
+      (atomically $ tryPutTMVar terminate ()) >> return ()
+      atomically $ readTMVar doneShuttingDown
+      NS.close socket

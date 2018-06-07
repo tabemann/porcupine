@@ -27,7 +27,8 @@
 -- ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 -- POSSIBILITY OF SUCH DAMAGE.
 
-{-# LANGUAGE OverloadedStrings, OverloadedLists, RecordWildCards #-}
+{-# LANGUAGE OverloadedStrings, OverloadedLists, RecordWildCards,
+             DeriveGeneric #-}
 
 module Control.Concurrent.Porcupine.Private.Types
 
@@ -56,7 +57,9 @@ module Control.Concurrent.Porcupine.Private.Types
    SourceId (..),
    DestId (..),
    RemoteEvent (..),
-   RemoteMessage (..))
+   RemoteMessage (..),
+   UserRemoteConnectFailed (..),
+   UserRemoteDisconnected (..))
 
 where
 
@@ -148,6 +151,7 @@ data NodeState =
   NodeState { nodeInfo :: Node,
               nodeKey :: Maybe Key,
               nodeReadOrder :: Bool,
+              nodeTerminate :: TMVar (),
               nodeProcesses :: HashMap ProcessId ProcessState,
               nodeLocalNodes :: HashMap NodeId Node,
               nodeRemoteNodes :: HashMap NodeId RemoteNodeState,
@@ -177,14 +181,12 @@ data GroupState =
 data RemoteNodeState =
   RemoteNodeState { rnodeId :: NodeId,
                     rnodeOutput :: TQueue RemoteMessage,
-                    rnodeTerminate :: TMVar (),
                     rnodeEndListeners :: Seq (DestId, Integer) }
 
 -- | The pending remote node state type
 data PendingRemoteNodeState =
   PendingRemoteNodeState { prnodeId :: PartialNodeId,
                            prnodeOutput :: TQueue RemoteMessage,
-                           prnodeTerminate :: TMVar (),
                            prnodeEndListeners :: Seq (DestId, Integer) }
 
 -- | The process Id type
@@ -223,7 +225,7 @@ data NodeId =
   NodeId { nidFixedNum :: Integer,
            nidAddress :: Maybe SockAddr',
            nidRandomNum :: Integer }
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Generic)
 
 -- | The node Id Show instance
 instance Show NodeId where
@@ -253,20 +255,14 @@ instance Binary NodeId where
                              nidAddress = maybeAddress }
 
 -- | The node Id Hashable instance
-instance Hashable NodeId where
-  hashWithSalt salt nid =
-    hashWithSalt salt (nidFixedNum nid) `xor`
-    hashWithSalt salt (nidRandomNum nid) `xor`
-    (case nidAddress of
-       Nothing -> complement salt
-       Just address -> hashWithSalt salt address)
+instance Hashable NodeId
 
 -- | The partial node Id type
 data PartialNodeId =
   PartialNodeId { pnidFixedNum :: Integer,
                   pnidAddress :: Maybe SockAddr',
                   pnidRandomNum :: Naybe Integer }
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Generic)
 
 -- | The partial node Id Show instance
 instance Show NodeId where
@@ -307,20 +303,13 @@ instance Binary PartialNodeId where
                                     pnidAddress = maybeAddress }
 
 -- | The partial node Id Hashable instance
-instance Hashable PartialNodeId where
-  hashWithSalt salt pnid =
-    hashWithSalt salt (pnidFixedNum pnid) `xor`
-    (case pnidRandomNum of
-       Nothing -> complement salt
-       Just randomNum -> hashWithSalt salt randomNum) `xor`
-    (case pnidAddress of
-       Nothing -> complement salt
-       Just address -> hashWithSalt salt address)
+instance Hashable PartialNodeId
 
 -- | A new SockAddr class
 data SockAddr' = SockAddrInet' PortNumber HostAddress
                | SockAddrInet6' PortNumber FlowInfo HostAddress6 ScopeID
                | SockAddrUnix' String
+               deriving (Generic)
 
 -- | Convert a SockAddr to a new SockAddr
 toSockAddr' (SockAddrInet port address) = SockAddrInet' port address
@@ -407,31 +396,14 @@ instance Binary SockAddr' where
       _ -> fail "invalid sockaddr serialization"
 
 -- | The SockAddr' Hashable instance
-instance Hashable SockAddr' where
-  hashWithSalt salt (SockAddrInet' port address) =
-    let (x, y, z, w) = hostAddressToTuple address
-    in hashWithSalt salt ((fromIntegral x :: Word32) .|.
-                          ((fromIntegral y :: Word32) `shift` 8) .|.
-                          ((fromIntegral z :: Word32) `shift` 16) .|.
-                          ((fromIntegral w :: Word32) `shift` 24))
-  hashWithSalt salt (SockAddrInet6' port flow address scope) =
-    let (p0, p1, p2, p3, p4, p5, p6, p7) = hostAddress6ToTuple address
-    in hashWithSalt salt ((fromIntegral p0 :: Word32) .|.
-                          ((fromIntegral p1 :: Word32) `shift` 16)) `xor`
-       hashWithSalt salt ((fromIntegral p2 :: Word32) .|.
-                          ((fromIntegral p3 :: Word32) `shift` 16)) `xor`
-       hashWithSalt salt ((fromIntegral p4 :: Word32) .|.
-                          ((fromIntegral p5 :: Word32) `shift` 16)) `xor`
-       hashWithSalt salt ((fromIntegral p6 :: Word32) .|.
-                          ((fromIntegral p7 :: Word32) `shift` 16))
-  hashWithSalt salt (SockAddrUnix' path) = hashWithSalt salt path
+instance Hashable SockAddr'
 
 -- | The group Id type
 data GroupId =
   GroupId { gidSequenceNum :: Integer,
             gidRandomNum :: Integer,
             gidOriginalNodeId :: Maybe NodeId }
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Generic)
 
 -- | The group Id Show instance
 instance Show GroupId where
@@ -461,13 +433,7 @@ instance Binary GroupId where
                               gidOriginalNodeId = maybeNid }
 
 -- | The group Id Hashable instance
-instance Hashable GroupId where
-  hashWithSalt salt gid =
-    hashWithSalt salt (gidSequenceNum gid) `xor`
-    hashWithSalt salt (gidRandomNum gid) `xor`
-    (case gidOriginalNodeId gid of
-       Nothing -> complement salt
-       Just nid -> hashWithSalt salt nid)
+instance Hashable GroupId
 
 -- | The message type
 data Message = UserMessage { umsgSourceId :: SourceId,
@@ -515,6 +481,7 @@ data SourceId = NoSource
               | NormalSource ProcessId
               | CauseSource { causeSourceId :: ProcessId,
                               causeCauseId :: ProcessId }
+              deriving (Eq, Ord, Generic)
 
 -- | The message source type Binary instance
 instance Binary SourceId where
@@ -535,17 +502,12 @@ instance Binary SourceId where
              _ -> fail "invalid source id serialization"
 
 -- | The group Id Hashable instance
-instance Hashable SourceId where
-  hashWithSalt salt NoSource = complement salt
-  hashWithSalt salt (NormalSource pid) = hashWithSalt salt pid
-  hashWithSalt salt CauseSource{..} =
-    complement $ hashWithSalt salt causeSourceId `xor`
-                 hashWithSalt salt causeCauseId
+instance Hashable SourceId
 
 -- | The message destination type
 data DestId = ProcessDest ProcessId
             | GroupDest GroupId
-            deriving (Eq, Ord)
+            deriving (Eq, Ord, Generic)
 
 -- | The message distination type Binary instance
 instance Binary DestId where
@@ -560,14 +522,13 @@ instance Binary DestId where
              _ -> fail "invalid destination id serialization"
 
 -- | The message destination type Hashable instance
-instance Hashable DestId where
-  hashWithSalt salt (ProcessDest pid) = hashWithSalt salt pid
-  hashWithSalt salt (GroupDest gid) = complement $ hashWithSalt salt gid
+instance Hashable DestId
 
 -- | The remote event type
 data RemoteEvent = RemoteConnected { rconNodeId :: NodeId,
                                      rconSocket :: Socket,
                                      rconBuffer :: ByteString }
+                 | RemoteConnectFailed { rcflNodeId : PartialNodeId }
                  | RemoteReceived { recvNodeId :: NodeId,
                                     recvMessage :: RemoteMessage }
                  | RemoteDisconnected { dconNodeId :: NodeId }
@@ -605,7 +566,7 @@ data RemoteMessage = RemoteUserMessage { rumsgSourceId :: SourceId,
                    | RemoteJoinMessage { rjoinNodeId :: NodeId }
                    | RemoteLeaveMessage
                    | RemotePartMessage { rpartNodeId :: NodeId }
-                   deriving (Eq, Ord)
+                   deriving (Eq, Ord, Generic)
 
 -- | The remote message type Binary instance
 instance Binary RemoteMessage where
@@ -745,3 +706,44 @@ instance Binary RemoteMessage where
         nid <- get
         return $ RemotePartMessage { rpartNodeId = nid }
       _ -> fail "invalid remote message serialization"
+
+-- | Remote messsage Hashable instance
+instance Hashable RemoteMessage
+
+-- | Pending remote node connect failed message.
+data UserRemoteConnectFailed =
+  UserRemoteConnectFailed { urcfNodeId :: PartialNodeId }
+  deriving (Eq, Ord, Generic)
+
+-- | Pending remote node connect failed message Binary instance.
+instance Binary UserRemoteConnectFailed where
+  put UserRemoteConnectFailed{..} = put urcfNodeId
+  get = do pnid <- get
+           return $ UserRemoteConnectFailed { urcfNodeId = pnid }
+
+-- | Pending remote node connect failed message Show instance.
+instance Show UserRemoteConnectFailed where
+  show UserRemoteConnectFailed{..} =
+    printf "userRemoteConnectFailed:%s" $ show urcfNodeId
+
+-- | Pending remote node connect failed message Hashable instance
+instance Hashable UserRemoteConnectFailed
+
+-- | Remote node disconnected message.
+data UserRemoteDisconnected =
+  UserRemoteDisconnected { urdcNodeId :: NodeId }
+  deriving (Eq, Ord, Generic)
+
+-- | Remote node disconnected message Binary instance.
+instance Binary UserRemoteDisconnected where
+  put UserRemoteDisconnected{..} = put urdcNodeId
+  get = do nid <- get
+           return $ UserRemoteDisconnected { urdcNodeId = nid }
+
+-- | Remote node disconnected message Show instance.
+instance Show UserRemoteDisconnected where
+  show UserRemoteDisconnected{..} =
+    printf "userRemoteDisconnected:%s" $ show urcfNodeId
+
+-- | Remote node disconnected message Hashable instance
+instance Hashable UserRemoteDisconnected

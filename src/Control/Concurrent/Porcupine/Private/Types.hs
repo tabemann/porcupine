@@ -28,7 +28,7 @@
 -- POSSIBILITY OF SUCH DAMAGE.
 
 {-# LANGUAGE OverloadedStrings, OverloadedLists, RecordWildCards,
-             DeriveGeneric #-}
+             DeriveGeneric, MultiParamTypeClasses #-}
 
 module Control.Concurrent.Porcupine.Private.Types
 
@@ -149,7 +149,7 @@ data Node =
 -- | The local node state type
 data NodeState =
   NodeState { nodeInfo :: Node,
-              nodeKey :: Maybe Key,
+              nodeKey :: Key,
               nodeReadOrder :: Bool,
               nodeTerminate :: TMVar (),
               nodeProcesses :: HashMap ProcessId ProcessState,
@@ -301,6 +301,12 @@ instance Binary PartialNodeId where
            return $ PartialNodeId { pnidFixedNum = fixedNum,
                                     pnidRandomNum = maybeRandomNum,
                                     pnidAddress = maybeAddress }
+
+-- | Get partial node Id of node Id
+partialNodeIdOfNodeId NodeId{..} =
+  PartialNodeId { pnidFixedNum = nidFixedNum,
+                  pnidAddress = nidAddress,
+                  pnidRandomNum = Just nidRandomNum }
 
 -- | The partial node Id Hashable instance
 instance Hashable PartialNodeId
@@ -467,8 +473,7 @@ data Message = UserMessage { umsgSourceId :: SourceId,
                                  shutHeader :: Header,
                                  shutPayload :: Payload }
              | ConnectMessage { connNode :: Node }
-             | ConnectRemoteMessage { conrNodeId :: PartialNodeId,
-                                      conrKey :: Maybe Key }
+             | ConnectRemoteMessage { conrNodeId :: PartialNodeId }
              | ListenEndMessage { lendListenedId :: DestId,
                                   lendListenerId :: DestId }
              | UnlistenEndMessage { ulendListenedId :: DestId,
@@ -558,7 +563,7 @@ data RemoteMessage = RemoteUserMessage { rumsgSourceId :: SourceId,
                                              rshutHeader :: Header,
                                              rshutPayload :: Payload }
                    | RemoteHelloMessage { rheloNodeId :: NodeId,
-                                          rheloKey :: Maybe Key }
+                                          rheloKey :: Key }
                    | RemoteListenEndMessage { rlendListenedId :: DestId,
                                               rlendListenerId :: DestId }
                    | RemoteUnlistenEndMessage { rulendListenedId :: DestId,

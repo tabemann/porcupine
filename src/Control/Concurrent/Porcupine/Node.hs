@@ -27,7 +27,8 @@
 -- ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 -- POSSIBILITY OF SUCH DAMAGE.
 
-{-# LANGUAGE OverloadedStrings, OverloadedLists, RecordWildCards #-}
+{-# LANGUAGE OverloadedStrings, OverloadedLists, RecordWildCards,
+             DeriveGeneric, MultiParamTypeClasses #-}
 
 module Control.Concurrent.Porcupine.Node
 
@@ -78,7 +79,9 @@ import Control.Exception.Base (SomeException,
                                AsyncException (..),
                                IOException (..),
                                catch)
-import Control.Monad (forM_)
+import Control.Monad (forM,
+                      forM_,
+                      (=<<))
 import Data.Functor ((<$>),
                      fmap))
 
@@ -231,7 +234,7 @@ handleRemoteConnected nid sock buffer = do
                      nodePendingRemoteNodes state,
                    nodeRemoteNodes =
                      M.insert nid rnode $ nodeRemoteNodes state }
-      broadcastExceptRemoteMessage (prnodeId pnode) $
+      broadcastExceptRemoteMessage nid $
         RemoteJoinMessage { rjoinNodeId = nid }
     Nothing -> do
       output <- liftIO $ atomically newTQueue
@@ -242,7 +245,10 @@ handleRemoteConnected nid sock buffer = do
                                       rnodeEndListeners = S.empty }
         in state { nodeRemoteNodes =
                      M.insert nid rnode $ nodeRemoteNodes state }
+      broadcastExceptRemoteMessage nid $
+        RemoteJoinMessage { rjoinNodeId = nid }
   runSocket nid output terminate socket buffer
+  updateRemoteNames nid
   runNode
 
 -- | Handle a remote connect failed event.
@@ -451,12 +457,14 @@ handleLocalShutdownMessage pid nid header payload = do
 -- | Handle a local connect message.
 handleLocalConnectMessage :: Node -> NodeM ()
 handleLocalConnectMessage node = do
-  connectLocalMessage node
+  connectLocal node
   runNode
 
 -- | Handle a local connect remote message.
-handleLocalConnectRemoteMessage :: NodeId -> Key -> NodeM ()
-handleLocalConnectRemoteMessage nid key = runNode
+handleLocalConnectRemoteMessage :: NodeId -> NodeM ()
+handleLocalConnectRemoteMessage nid =
+  connectRemote nid
+  runNode
 
 -- | Handle a local listen end message.
 handleLocalListenEndMessage :: DestId -> DestId -> NodeM ()
@@ -505,6 +513,7 @@ handleLocalHelloMessage node = do
   case M.lookup (nodeId node) $ nodeLocalNodes state of
     Nothing -> connectLocal node
     Just _ -> return ()
+  updateRemoteNames $ nodeId node
   runNode
 
 -- | Handle a local join message.
@@ -644,7 +653,9 @@ handleRemoteUnlistenEndMessage nid listenedId listenerId = do
 
 -- | Handle a remote join message.
 handleRemoteJoinMessage :: NodeId -> NodeId -> NodeM ()
-handleRemoteJoinMessage nid remoteNid = runNode
+handleRemoteJoinMessage nid remoteNid = do
+  connectRemote (partialNodeIdOfNodeId remoteNid)
+  runNode
 
 -- | Send a user message to a process.
 sendUserMessage :: DestId -> SourceId -> Header -> Payload -> NodeM ()
@@ -1064,6 +1075,15 @@ matchPartialNodeId pnid nid =
      Nothing -> True
      Just randomNum -> randomNum == nidRandomNum nid)
 
+-- | Get whether a partial node Id matches another partial node Id.
+matchPartialNodeId' :: PartialNodeId -> PartialNodeId -> Bool
+matchPartialNodeId' pnid0 pnid1 =
+  (pnidFixedNum pnid0 == pnidFixedNum pnid1) &&
+  (pnidAddress pnid0 == pnidAddress pnid1) &&
+  (case (pnidRandomNum pnid0, pnidRandomNum pnid1) of
+     (Just randomNum0, Just randomNum1) -> randomNum0 == randomNum1
+     _ -> True)
+
 -- | Find a pending remote node.
 findPendingRemoteNode :: NodeId -> NodeM PendingRemoteNodeState
 findPendingRemoteNode nid = do
@@ -1153,6 +1173,51 @@ runSocketOutput nid input terminate finalize socket = do
                 atomically $ putTMVar finalize ()
     Left () -> do NS.shutdown socket NS.ShutdownBoth
                   atomically $ putTMVar finalize ()
+
+-- | See if a connection already exists with a node.
+isAlreadyConnected :: PartialNodeId -> NodeM Bool
+isAlreadyConnected pnid = do
+  rnodes <- nodeRemoteNodes <$> St.get
+  let connectedToAny = any . fmap (matchPartialNodeId pnid) $ M.keys rnodes
+  if not connectedToAny
+    then do
+      pnodes <- nodePendingRemoteNodes <$> St.get
+      return . any $ fmap (matchPartialNodeId' pnid . prnodeId) pnodes
+    else return True
+
+-- | Connect to a remote node.
+connectRemote :: PartialNodeId -> Key -> NodeM ()
+connectRemote pnid = do
+  alreadyConnected <- isAlreadyConnected pnid
+  if alreadyConnected
+    then case pnidAddress pnid of
+           Just address -> do
+             let address' = fromSockAddr' address
+             socket <- NS.socket (familyOfSockAddr address') NS.Stream
+                       NS.defaultProtocol
+             result <- catch (Right <$> NS.connect socket address')
+                       (\e -> const (return $ Left ()) (e :: IOException))
+             remoteQueue <- nodeRemoteQueue . nodeInfo <$> St.get
+             case result of
+               Right _ -> do
+                 nid <- nodeId . nodeInfo <$> St.get
+                 key <- nodeKey <$> St.get
+                 terminate <- nodeTerminate <$> St.get
+                 output <- liftIO $ atomically newTQueue
+                 let pnode = PendingRemoteNodeState { prnodeId = pnid,
+                                                      prnodeOutput = output,
+                                                      prnodeEndListeners =
+                                                        S.empty }
+                 St.modify $ \state ->
+                   state { nodePendingRemoteNodes =
+                             nodePendingRemoteNodes state |> pnode }
+                 liftIO $ handshakeWithSocket nid remoteQueue terminate socket
+                   key (Just pnid)
+               Left _ -> do
+                 liftIO . atomically . writeTQueue remoteQueue $
+                   RemoteConnectFailed { rcflNodeId = pnid }
+           Nothing -> return ()
+    else return ()
 
 -- | Handshake with socket.
 handshakeWithSocket :: NodeId -> TQueue RemoteEvent -> TMVar () -> NS.Socket ->
@@ -1266,16 +1331,18 @@ notifyHandshakeFailure remoteQueue (Just pnid) = do
     RemoteConnectFailed { rcflNodeId = pnid }
 notifyHandshakeFailure _ Nothing = return ()
 
+-- | Get family of SockAddr
+familyOfSockAddr :: NS.SockAddr -> NS.Family
+familyOfSockAddr (NS.SockAddrInet _ _) = NS.AF_INET
+familyOfSockAddr (NS.SockAddrInet6 _ _ _ _) = NS.AF_INET6
+familyOfSockAddr (NS.SockAddrUnix _) = NS.AF_UNIX
+familyOfSockAddr _ = error "not supported"
+        
 -- | Start listening for incoming connections
 startListen :: NodeId -> SockAddr -> TQueue RemoteEvent -> TMVar () -> Key ->
                IO ()
 startListen nid address remoteQueue terminate key = do
-  let family = case address of
-        NS.SockAddrInet _ _ -> NS.AF_INET
-        NS.SockAddrInet6 _ _ _ _ -> NS.AF_INET6
-        NS.SockAddrUnix _ -> NS.AF_UNIX
-        _ -> error "not supported"
-  socket <- NS.socket family NS.Stream NS.defaultProtocol
+  socket <- NS.socket (familyOfSockAddr address) NS.Stream NS.defaultProtocol
   NS.bind socket address
   NS.listen socket 5
   doneShuttingDown <- atomically newEmptyTMVar
@@ -1306,3 +1373,14 @@ runListen nid remoteQueue socket terminate doneShuttingDown key = do
       (atomically $ tryPutTMVar terminate ()) >> return ()
       atomically $ readTMVar doneShuttingDown
       NS.close socket
+
+-- | Update assigned names for remote node.
+updateRemoteNames :: NodeId -> NodeM ()
+updateRemoteNames nid = do
+  names <- atomically . readTVar =<< nodeNames . nodeInfo <$> St.get
+  forM_ (M.keys names) $ \name ->
+    case M.lookup name names of
+      Just did ->
+        sendRemoteMessage nid $ RemoteAssignMessage { rassName = name,
+                                                      rassDestId = did }
+      Nothing -> error "impossible"

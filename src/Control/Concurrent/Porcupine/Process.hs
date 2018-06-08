@@ -27,7 +27,8 @@
 -- ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 -- POSSIBILITY OF SUCH DAMAGE.
 
-{-# LANGUAGE OverloadedStrings, OverloadedLists, RecordWildCards #-}
+{-# LANGUAGE OverloadedStrings, OverloadedLists, RecordWildCards,
+             DeriveGeneric, MultiParamTypeClasses #-}
 
 module Control.Concurrent.Porcupine.Process
 
@@ -38,6 +39,14 @@ module Control.Concurrent.Porcupine.Process
    Payload,
    Name,
    Key,
+   ProcessId,
+   NodeId,
+   PartialNodeId,
+   GroupId,
+   SourceId (..),
+   DestId (..),
+   UserRemoteConnectFailed (..),
+   UserRemoteDisconnected (..),
    myProcessId,
    myNodeId,
    spawnInit,

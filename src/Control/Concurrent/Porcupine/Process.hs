@@ -112,6 +112,7 @@ import Control.Concurrent.STM.TQueue (TQueue,
                                       writeQueue)
 import qualified Control.Monad.Trans.State.Strict as St
 import Data.Functor ((<$>))
+import Control.Monad ((=<<))
 
 -- | Get the current process Id.
 myProcessId :: Process ProcessId
@@ -329,9 +330,17 @@ assign name did = do
   sendRaw $ AssignMessage { assName = name,
                             assDestId = did }
   names <- nodeNames . procNode <$> Process St.get
-  liftIO . atomically $ do
-    nameMap <- readTVar names
-    writeTVar names $ M.insert name did nameMap
+  names' <- liftIO . atomically $ readTVar names
+  liftIO . atomically . writeTVar names $
+    case M.lookup name names' of
+      Just entries ->
+        case S.findIndexL (\(did', _) -> did == did') entries of
+          Just index ->
+            let entries' =
+                  S.adjust (\(did', count) -> (did', count + 1)) index entries
+            in M.insert name entries' names'
+          Nothing -> M.insert name (entries |> (did, 1)) names'
+      Nothing -> M.insert name (S.singleton (did, 1)) names'
 
 -- | Unassign a name from a process or group.
 unassign :: Name -> DestId -> Process ()
@@ -339,16 +348,34 @@ unassign name did = do
   sendRaw $ UnassignMessage { uassName = name,
                               uassDestId = did }
   names <- nodeNames . procNode <$> Process St.get
-  liftIO . atomically $ do
-    nameMap <- readTVar names
-    writeTVar names $ M.delete name nameMap
+  names' <- liftIO . atomically $ readTVar names
+  liftIO . atomically . writeTVar names $
+    case M.lookup name names' of
+      Just entries ->
+        case S.findIndexL (\(did', _) -> did == did') entries of
+          Just index ->
+            case S.lookup index entries of
+              Just (_, count)
+                | count > 1 ->
+                  let entries' = S.adjust (\(did', count) -> (did', count - 1))
+                                 index entries
+                  in M.insert name entries' names'
+                | True -> M.insert name (S.deleteAt index entries) names'
+              Nothing -> return names'
+          Nothing -> return return names'
+      Nothing -> return names'
 
 -- | Look up a process or group by name.
 lookup :: Name -> Process (Maybe DestId)
 lookup name = do
   processInfo <- Process St.get
   names <- liftIO . atomically . readTVar . nodeNames $ procNode processInfo
-  return $ M.lookup name names
+  case M.lookup name names of
+    Just entries ->
+      case S.viewl entries of
+        (did, _) :< _ -> return $ Just did
+        EmptyL -> return Nothing
+    Nothing -> return Nothing
 
 -- | Generate a new group Id.
 newGroupId :: Process GroupId

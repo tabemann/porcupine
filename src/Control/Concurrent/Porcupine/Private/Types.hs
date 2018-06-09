@@ -144,7 +144,7 @@ data Node =
          nodeRemoteQueue :: TQueue RemoteEvent,
          nodeGen :: TVar StdGen,
          nodeNextSequenceNum :: TVar Integer,
-         nodeNames :: TVar (HashMap Name DestId) }
+         nodeNames :: TVar (HashMap Name (Seq (DestId, Integer))) }
 
 -- | The local node state type
 data NodeState =

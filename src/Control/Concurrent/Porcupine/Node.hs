@@ -601,20 +601,41 @@ handleRemoteUnsubscribeMessage nid _ gid = do
 
 -- | Handle a remote assign message.
 handleRemoteAssignMessage :: NodeId -> Name -> DestId -> NodeM ()
-handleRemoteAssignMessage _ name destId = do
+handleRemoteAssignMessage _ name did = do
   names <- nodeNames . nodeInfo <$> St.get
-  liftIO . atomically $ do
-    nameMap <- readTVar names
-    writeTVar names $ M.insert name destId nameMap
+  names' <- liftIO . atomically $ readTVar names
+  liftIO . atomically . writeTVar names $
+    case M.lookup name names' of
+      Just entries ->
+        case S.findIndexL (\(did', _) -> did == did') entries of
+          Just index ->
+            let entries' =
+                  S.adjust (\(did', count) -> (did', count + 1)) index entries
+            in M.insert name entries' names'
+          Nothing -> M.insert name (entries |> (did, 1)) names'
+      Nothing -> M.insert name (S.singleton (did, 1)) names'
   runNode
 
 -- | Handle a remote unassign message.
 handleRemoteUnassignMessage :: NodeId -> Name -> DestId -> NodeM ()
-handleRemoteUnassignMessage _ name destId = do
+handleRemoteUnassignMessage _ name did = do
   names <- nodeNames . nodeInfo <$> St.get
-  liftIO . atomically $ do
-    nameMap <- readTVar names
-    writeTVar names $ M.delete name nameMap
+  names' <- liftIO . atomically $ readTVar names
+  liftIO . atomically . writeTVar names $
+    case M.lookup name names' of
+      Just entries ->
+        case S.findIndexL (\(did', _) -> did == did') entries of
+          Just index ->
+            case S.lookup index entries of
+              Just (_, count)
+                | count > 1 ->
+                  let entries' = S.adjust (\(did', count) -> (did', count - 1))
+                                 index entries
+                  in M.insert name entries' names'
+                | True -> M.insert name (S.deleteAt index entries) names'
+              Nothing -> return names'
+          Nothing -> return return names'
+      Nothing -> return names'
   runNode
 
 -- | Handle a remote shutdown message.

@@ -47,7 +47,7 @@ import qualified System.Random as R
 import qualified Network.Socket as NS
 import qualified Network.Socket.ByteString as NSB
 import qualified Data.ByteString as BSS
-import Data.Word (Int64)
+import Data.Int (Int64)
 import Data.Sequence (ViewL (..))
 import Data.Sequence ((|>))
 import Control.Concurrent.Async (Async,
@@ -65,7 +65,7 @@ import Control.Concurrent.STM.TQueue (TQueue,
                                       newTQueue,
                                       readTQueue,
                                       tryReadTQueue,
-                                      writeQueue)
+                                      writeTQueue)
 import Control.Concurrent.STM.TMVar (TMVar,
                                      newEmptyTMVar,
                                      putTMVar,
@@ -83,14 +83,14 @@ import Control.Monad (forM,
                       forM_,
                       (=<<))
 import Data.Functor ((<$>),
-                     fmap))
+                     fmap)
 
 -- | Start a node with a given fixed index, optional address, and optional key.
 start :: Integer -> Maybe NS.SockAddr -> Key -> IO Node
 start fixedNum address key = do
   gen <- R.newStdGen
-  (randomNum, gen') <- R.random gen
-  let nid = NodeId { nidFixedNum = fixedNum,
+  let (randomNum, gen') = R.random gen
+      nid = NodeId { nidFixedNum = fixedNum,
                      nidAddress = toSockAddr' <$> address,
                      nidRandomNum = randomNum }
   queue <- atomically newTQueue
@@ -109,16 +109,16 @@ start fixedNum address key = do
                               nodeKey = key,
                               nodeReadOrder = False,
                               nodeTerminate = terminate,
-                              nodeProcesses = S.empty,
+                              nodeProcesses = M.empty,
+                              nodeLocalNodes = M.empty,
                               nodeRemoteNodes = M.empty,
-                              nodePendingRemoteNodes = S.empty
-                              nodeGroups = S.empty }
+                              nodePendingRemoteNodes = S.empty,
+                              nodeGroups = M.empty }
   async $ St.runStateT runNode nodeState >> return ()
   case address of
-    Just _ -> startListen nid address remoteQueue terminate key
+    Just address -> startListen nid address remoteQueue terminate key
     Nothing -> return ()
-  return $ Node { nodeId = nid,
-                  nodeOutput = input }
+  return info
 
 -- | Run a node.
 runNode :: NodeM ()
@@ -133,7 +133,7 @@ runNode = do
       (Left <$> readTQueue remoteQueue)
     else
       liftIO . atomically $ (Left <$> readTQueue remoteQueue) `orElse`
-      (Right <$> readTQuee input)
+      (Right <$> readTQueue input)
   St.modify $ \state -> state { nodeReadOrder = not readOrder }
   case received of
     Right message -> handleLocalMessage message
@@ -165,7 +165,7 @@ handleLocalMessage ShutdownMessage{..} =
 handleLocalMessage ConnectMessage{..} =
   handleLocalConnectMessage connNode
 handleLocalMessage ConnectRemoteMessage{..} =
-  handleLocalConnectRemoteMessage conrNodeId conrKey
+  handleLocalConnectRemoteMessage conrNodeId
 handleLocalMessage ListenEndMessage{..} =
   handleLocalListenEndMessage lendListenedId lendListenerId
 handleLocalMessage UnlistenEndMessage{..} =
@@ -178,16 +178,16 @@ handleLocalMessage JoinMessage{..} =
 -- | Handle a remote event.
 handleRemoteEvent :: RemoteEvent -> NodeM ()
 handleRemoteEvent RemoteConnected{..} =
-  handleRemoteConnected rconNodeId rconNodeId rconBuffer
+  handleRemoteConnected rconNodeId rconSocket rconBuffer
 handleRemoteEvent RemoteConnectFailed{..} =
   handleRemoteConnectFailed rcflNodeId
 handleRemoteEvent RemoteReceived{..} =
   handleRemoteMessage recvNodeId recvMessage
-handleRemoteDisconnected RemoteDisconnected{..} =
+handleRemoteEvent RemoteDisconnected{..} =
   handleRemoteDisconnected dconNodeId
 
 -- | Handle a remote message.
-handleRemoteMessage :: NodeID -> RemoteMessage -> NodeM ()
+handleRemoteMessage :: NodeId -> RemoteMessage -> NodeM ()
 handleRemoteMessage nodeId RemoteUserMessage{..} =
   handleRemoteUserMessage nodeId rumsgSourceId rumsgDestId rumsgHeader
   rumsgPayload
@@ -217,15 +217,14 @@ handleRemoteMessage nodeId RemoteJoinMessage{..} =
 
 -- | Handle a remote connected event.
 handleRemoteConnected :: NodeId -> NS.Socket -> BS.ByteString -> NodeM ()
-handleRemoteConnected nid sock buffer = do
+handleRemoteConnected nid socket buffer = do
   pnode <- findPendingRemoteNode nid
   terminate <- nodeTerminate <$> St.get
-  case pnode of
+  output <- case pnode of
     Just pnode -> do
       St.modify $ \state ->
         let rnode = RemoteNodeState { rnodeId = nid,
                                       rnodeOutput = prnodeOutput pnode,
-                                      rnodeTerminate = prnodeTerminate pnode,
                                       rnodeEndListeners =
                                         prnodeEndListeners pnode }
         in state { nodePendingRemoteNodes =
@@ -236,17 +235,18 @@ handleRemoteConnected nid sock buffer = do
                      M.insert nid rnode $ nodeRemoteNodes state }
       broadcastExceptRemoteMessage nid $
         RemoteJoinMessage { rjoinNodeId = nid }
+      return $ prnodeOutput pnode
     Nothing -> do
       output <- liftIO $ atomically newTQueue
       St.modify $ \state ->
         let rnode = RemoteNodeState { rnodeId = nid,
                                       rnodeOutput = output,
-                                      rnodeTerminate = terminate,
                                       rnodeEndListeners = S.empty }
         in state { nodeRemoteNodes =
                      M.insert nid rnode $ nodeRemoteNodes state }
       broadcastExceptRemoteMessage nid $
         RemoteJoinMessage { rjoinNodeId = nid }
+      return output
   runSocket nid output terminate socket buffer
   updateRemoteNames nid
   runNode
@@ -254,14 +254,14 @@ handleRemoteConnected nid sock buffer = do
 -- | Handle a remote connect failed event.
 handleRemoteConnectFailed :: PartialNodeId -> NodeM ()
 handleRemoteConnectFailed pnid = do
-  pnodes <-nodePendingRemoteNodes <$> St.get
-  let header = B.encode $ "remoteConnectFailed" :: T.Text
+  pnodes <- nodePendingRemoteNodes <$> St.get
+  let header = B.encode ("remoteConnectFailed" :: T.Text)
       payload = B.encode $ UserRemoteConnectFailed { urcfNodeId = pnid }
   forM_ pnodes $ \pnode ->
     if prnodeId pnode == pnid
     then do
       forM_ (prnodeEndListeners pnode) $ \(did, _) ->
-        sendUserMessage did NoSource header payload
+        sendLocalUserMessage did NoSource header payload
     else return ()
   St.modify $ \state ->
     state { nodePendingRemoteNodes =
@@ -273,12 +273,12 @@ handleRemoteConnectFailed pnid = do
 handleRemoteDisconnected :: NodeId -> NodeM ()
 handleRemoteDisconnected nid = do
   rnodes <- nodeRemoteNodes <$> St.get
-  let header = B.encode $ "remoteDisconnected" :: T.Text
+  let header = B.encode ("remoteDisconnected" :: T.Text)
       payload = B.encode $ UserRemoteDisconnected  { urdcNodeId = nid }
-  case S.lookup nid rnodes of
+  case M.lookup nid rnodes of
     Just rnode -> do
       forM_ (rnodeEndListeners rnode) $ \(did, _) ->
-        sendUserMessage did NoSource header payload
+        sendLocalUserMessage did NoSource header payload
       St.modify $ \state ->
         state { nodeRemoteNodes = M.delete nid $ nodeRemoteNodes state }
     Nothing -> return ()
@@ -287,7 +287,7 @@ handleRemoteDisconnected nid = do
 -- | Handle a local user message.
 handleLocalUserMessage :: SourceId -> DestId -> Header -> Payload -> NodeM ()
 handleLocalUserMessage sourceId destId header payload = do
-  sendUserMessage destId sourceId header payload
+  sendLocalUserMessage destId sourceId header payload
   runNode
 
 -- | Handle a local spawn message.
@@ -303,10 +303,9 @@ handleLocalSpawnMessage sourceId entry processId header payload = do
                                   procNode = nodeInfo state }
   asyncThread <- liftIO . async $ do
     maybeException <-
-      catch (do St.runState (let Process procState =
-                                   entry sourceId header payload
-                             in procState) processInfo
-                return Nothing) $ \e -> return $ Just e
+      catch (do St.evalStateT (entry sourceId header payload >> return ())
+                  processInfo
+                return Nothing) $ \e -> return $ Just (e :: SomeException)
     atomically . writeTQueue (nodeQueue $ nodeInfo state) $
       EndMessage { endProcessId = processId, endException = maybeException }
   let processState = ProcessState { pstateInfo = processInfo,
@@ -315,7 +314,8 @@ handleLocalSpawnMessage sourceId entry processId header payload = do
                                     pstateEndCause = Nothing,
                                     pstateEndListeners = S.empty }
   St.modify $ \state ->
-    state { nodeProcesses = M.insert processId processState nodeProcesses }
+    state { nodeProcesses = M.insert processId processState $
+                            nodeProcesses state }
   runNode
 
 -- | Handle a local quit message.
@@ -326,8 +326,8 @@ handleLocalQuitMessage pid header payload = do
                     then
                       process {
                         pstateEndMessage =
-                          case pstateEndMessage of
-                            Just _ -> pstateEndMessage
+                          case pstateEndMessage process of
+                            Just message -> message
                             Nothing -> Just (header, payload),
                         pstateTerminating = True }
                     else process)
@@ -344,16 +344,17 @@ handleLocalEndMessage processId exception = do
       removeProcess processId
       let message = case exception of
             Just exception ->
-              let asyncException = (fromException exception) :: AsyncException
+              let asyncException =
+                    (fromException exception) :: Maybe AsyncException
               in case asyncException of
                 Just asyncException
                   | asyncException /= ThreadKilled &&
                     asyncException /= UserInterrupt ->
-                      Just (B.encode $ "exceptionExit" :: T.Text,
+                      Just (B.encode ("exceptionExit" :: T.Text),
                              B.encode . T.pack $ show exception)
                   | True -> Nothing
                 Nothing -> 
-                  Just (B.encode $ "exceptionExit" :: T.Text,
+                  Just (B.encode ("exceptionExit" :: T.Text),
                          B.encode . T.pack $ show exception)
             Nothing -> Nothing
       sendEndMessageForProcess process message
@@ -379,7 +380,7 @@ handleLocalSubscribeMessage pid gid = do
           updateGroup
             (\group -> group { groupLocalSubscribers =
                                  S.adjust (\(pid, count) -> (pid, count + 1))
-                                 index $ groupRemoteSubscribers group })
+                                 index $ groupLocalSubscribers group })
             gid
         Nothing -> do
           updateGroup
@@ -388,8 +389,8 @@ handleLocalSubscribeMessage pid gid = do
             gid
     Nothing -> do addGroup gid $
                     GroupState { groupId = gid,
-                                 groupLocalSubscribers = S.empty,
-                                 groupRemoteSubscribers = S.singleton (pid, 1),
+                                 groupLocalSubscribers = S.singleton (pid, 1),
+                                 groupRemoteSubscribers = S.empty,
                                  groupEndListeners = S.empty }
   broadcastRemoteMessage $ RemoteSubscribeMessage { rsubProcessId = pid,
                                                     rsubGroupId = gid }
@@ -461,9 +462,9 @@ handleLocalConnectMessage node = do
   runNode
 
 -- | Handle a local connect remote message.
-handleLocalConnectRemoteMessage :: NodeId -> NodeM ()
-handleLocalConnectRemoteMessage nid =
-  connectRemote nid
+handleLocalConnectRemoteMessage :: PartialNodeId -> NodeM ()
+handleLocalConnectRemoteMessage pnid = do
+  connectRemote pnid
   runNode
 
 -- | Handle a local listen end message.
@@ -528,7 +529,9 @@ handleLocalJoinMessage node = do
 -- | Handle a remote user message.
 handleRemoteUserMessage :: NodeId -> SourceId -> DestId -> Header -> Payload ->
                            NodeM ()
-handleRemoteUserMessage nid sourceId destId header payload = runNode
+handleRemoteUserMessage nid sourceId destId header payload = do
+  handleIncomingUserMessage destId sourceId header payload
+  runNode
 
 -- | Handle a remote process end message.
 handleRemoteEndMessage :: NodeId -> SourceId -> Header -> Payload ->
@@ -536,9 +539,9 @@ handleRemoteEndMessage :: NodeId -> SourceId -> Header -> Payload ->
 handleRemoteEndMessage nid sourceId header payload = runNode
 
 -- | Handle a remote kill message.
-handleRemoteKillMessage :: NodeId -> SourceId -> DestId -> Header -> Payload ->
+handleRemoteKillMessage :: NodeId -> ProcessId -> DestId -> Header -> Payload ->
                            NodeM ()
-handleRemoteKillMessage nid processId destId header payload =
+handleRemoteKillMessage nid processId destId header payload = do
   case destId of
     ProcessDest destPid -> killLocalProcess processId destPid header payload
     GroupDest destGid -> killGroupForRemote processId destGid header payload
@@ -679,8 +682,8 @@ handleRemoteJoinMessage nid remoteNid = do
   runNode
 
 -- | Send a user message to a process.
-sendUserMessage :: DestId -> SourceId -> Header -> Payload -> NodeM ()
-sendUserMessage destId sourceId header payload = do
+sendLocalUserMessage :: DestId -> SourceId -> Header -> Payload -> NodeM ()
+sendLocalUserMessage destId sourceId header payload = do
   state <- St.get
   case destId of
     ProcessDest pid ->
@@ -718,6 +721,38 @@ sendUserMessage destId sourceId header payload = do
                                   rumsgDestId = destId,
                                   rumsgHeader = header,
                                   rumsgPayload = payload }
+
+-- | Send incoming user message to destination processes.
+handleIncomingUserMessage :: DestId -> SourceId -> Header -> Payload -> NodeM ()
+handleIncomingUserMessage destId sourceId header payload = do
+  state <- St.get
+  case destId of
+    ProcessDest pid ->
+      if pidNodeId pid == nodeId (nodeInfo state)
+      then case M.lookup pid $ nodeProcesses state of
+             Just process -> do
+               liftIO . atomically $ do
+                 writeTQueue (procInput process) $
+                   UserMessage { umsgSourceId = sourceId,
+                                 umsgDestId = destId,
+                                 umsgHeader = header,
+                                 umsgPayload = payload }
+             Nothing -> return ()
+      else return ()
+    GroupDest gid ->
+      case M.lookup gid $ nodeGroups state of
+        Just group -> do
+          forM_ (groupLocalSubscribers group) $ \(pid, _) ->
+            case M.lookup pid $ nodeProcesses state of
+              Just process -> do
+                liftIO . atomically $ do
+                  writeTQueue (procInput process) $
+                    UserMessage { umsgSourceId = sourceId,
+                                  umsgDestId = destId,
+                                  umsgHeader = header,
+                                  umsgPayload = payload }
+              Nothing -> return ()
+
 -- | Send a locall message.
 sendLocalMessage :: Node -> Message -> NodeM ()
 sendLocalMessage node message = do
@@ -753,7 +788,7 @@ broadcastRemoteMessage message = do
 
 -- | Broadcast a remote message to all remote nodes except a particular node.
 broadcastExceptRemoteMessage :: NodeId -> RemoteMessage -> NodeM ()
-broadcaseExceptRemoteMessage nid message = do
+broadcastExceptRemoteMessage nid message = do
   state <- St.get
   forM_ (nodeRemoteNodes state) $ \rnode ->
     if rnodeId rnode /= nid
@@ -822,13 +857,13 @@ sendEndMessageForProcess process message = do
                           causeCauseId = causeId }
           Nothing -> NormalSource pid
   forM_ (pstateEndListeners process) $ \(did, _) ->
-    sendUserMessage did sourceId header payload
+    sendLocalUserMessage did sourceId header payload
   groups <- M.elems . nodeGroups <$> St.get
   forM_ groups $ \group -> do
     case findIndexL (\(pid', _) -> pid == pid') $ groupLocalSubscribers group of
       Just _ -> do
         for (groupEndListeners group) $ \(did, _) ->
-          sendUserMessage did sourceId header payload
+          sendLocalUserMessage did sourceId header payload
       Nothing -> return ()
 
 -- | Kill a process.
@@ -838,7 +873,7 @@ killProcess pid targetPid header payload = do
   if pidNodeId processId == nodeId node
     then killLocalProcess pid targetPid header payload
     else sendRemoteMessage (pidNodeId targetPid) $
-         RemoteKillMessage { rkillProcessId pid,
+         RemoteKillMessage { rkillProcessId = pid,
                              rkillDestId = SourceDest targetPid,
                              rkillHeader = header,
                              rkillPayload = payload }
@@ -865,8 +900,8 @@ killLocalProcess sourcePid destPid header payload = do
     Nothing -> return ()
 
 -- | Kill a group.
-killGroup :: SourceId -> GroupId -> Header -> Payload -> NodeM ()
-killGroup sourcePid destGid header payload = do
+killGroup :: ProcessId -> GroupId -> Header -> Payload -> NodeM ()
+killGroup processId destGid header payload = do
   state <- St.get
   case M.lookup destGid $ nodeGroups state of
     Just group -> do
@@ -874,7 +909,7 @@ killGroup sourcePid destGid header payload = do
         killLocalProcess $ NormalSource pid
       forM_ (groupRemoteSubscribers group) $ \(nid, _) -> do
         sendRemoteMessage nid $
-          RemoteKillMessage { rkillProcessId = sourceId,
+          RemoteKillMessage { rkillProcessId = processId,
                               rkillDestId = GroupDest destGid,
                               rkillHeader = header,
                               rkillPayload = payload }
@@ -1041,7 +1076,6 @@ startLocalCommunication node = do
   let remoteNodeState =
         RemoteNodeState { rnodeId = nodeId node,
                           rnodeOutput = output,
-                          rnodeTerminate = terminate,
                           rnodeEndListeners = S.empty }
   St.modify $ \state ->
     state { nodeRemoteNodes = M.insert (nodeId node) remoteNodeState $
@@ -1106,7 +1140,7 @@ matchPartialNodeId' pnid0 pnid1 =
      _ -> True)
 
 -- | Find a pending remote node.
-findPendingRemoteNode :: NodeId -> NodeM PendingRemoteNodeState
+findPendingRemoteNode :: NodeId -> NodeM (Maybe PendingRemoteNodeState)
 findPendingRemoteNode nid = do
   pending <- nodeRemotePendingNodes St.get
   case S.findIndexL
@@ -1136,7 +1170,7 @@ runSocket nid output terminate socket buffer = do
 
 -- | Run socket input.
 runSocketInput :: NodeId -> TQueue RemoteEvent -> TMVar () -> TMVar () ->
-                  NS.Socket -> ByteString -> IO ()
+                  NS.Socket -> BS.ByteString -> IO ()
 runSocketInput nid input terminate finalize socket buffer = do
   catch (runsocketInput' nid input socket buffer)
     (\e -> const (return ()) (e :: IOException))
@@ -1330,7 +1364,7 @@ handshakeWithSocket'' nid remoteQueue terminate socket key buffer
                 RemoteHelloMessage{..}
                   | rheloKey == key -> do
                       atomically $ do
-                        writeQueue remoteQueue $
+                        writeTQueue remoteQueue $
                           RemoteConnected { rconNodeId = rheloNodeId message,
                                             rconSocket = socket,
                                             rconBuffer = rest }
@@ -1345,7 +1379,7 @@ handshakeWithSocket'' nid remoteQueue terminate socket key buffer
       NS.close socket
       notifyHandshakeFailure remoteQueue pnid
 
--- | Notify failure if partial node ID is present.
+-- | Notify failure if partial node Id is present.
 notifyHandshakeFailure :: TQueue RemoteEvent -> Maybe PartialNodeId -> IO ()
 notifyHandshakeFailure remoteQueue (Just pnid) = do
   atomically . writeTQueue remoteQueue $
@@ -1360,7 +1394,7 @@ familyOfSockAddr (NS.SockAddrUnix _) = NS.AF_UNIX
 familyOfSockAddr _ = error "not supported"
         
 -- | Start listening for incoming connections
-startListen :: NodeId -> SockAddr -> TQueue RemoteEvent -> TMVar () -> Key ->
+startListen :: NodeId -> NS.SockAddr -> TQueue RemoteEvent -> TMVar () -> Key ->
                IO ()
 startListen nid address remoteQueue terminate key = do
   socket <- NS.socket (familyOfSockAddr address) NS.Stream NS.defaultProtocol

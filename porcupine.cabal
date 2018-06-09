@@ -42,7 +42,10 @@ library
                 network,
                 containers >=0.5.8,
                 hashable,
-                binary
+                binary,
+                transformers,
+                random,
+                unordered-containers
   default-language: Haskell2010
 
 --executable porcupine-exe

@@ -28,12 +28,16 @@
 -- POSSIBILITY OF SUCH DAMAGE.
 
 {-# LANGUAGE OverloadedStrings, OverloadedLists, RecordWildCards,
-             DeriveGeneric, MultiParamTypeClasses #-}
+             DeriveGeneric, MultiParamTypeClasses,
+             GeneralizedNewtypeDeriving #-}
 
 module Control.Concurrent.Porcupine.Node
 
   (Node,
-   start)
+   start,
+   waitShutdown,
+   waitShutdownSTM,
+   getNodeId)
 
 where
 
@@ -87,6 +91,7 @@ import Control.Monad (forM,
                       (=<<))
 import Data.Functor ((<$>),
                      fmap)
+import Text.Printf (printf)
 
 -- | Start a node with a given fixed index, optional address, and optional key.
 start :: Integer -> Maybe NS.SockAddr -> Key -> IO Node
@@ -102,11 +107,13 @@ start fixedNum address key = do
   gen'' <- atomically $ newTVar gen'
   nextSequenceNum <- atomically $ newTVar 0
   terminate <- atomically newEmptyTMVar
+  shutdown <- atomically newEmptyTMVar
   let info = Node { nodeId = nid,
                     nodeQueue = queue,
                     nodeRemoteQueue = remoteQueue,
                     nodeGen = gen'',
                     nodeNextSequenceNum = nextSequenceNum,
+                    nodeShutdown = shutdown,
                     nodeNames = names }
       nodeState = NodeState { nodeInfo = info,
                               nodeKey = key,
@@ -122,6 +129,18 @@ start fixedNum address key = do
     Just address -> startListen nid address remoteQueue terminate key
     Nothing -> return ()
   return info
+
+-- | Wait for a node to shutdown.
+waitShutdown :: Node -> IO ()
+waitShutdown = atomically . readTMVar . nodeShutdown
+
+-- | Wait for a node to shutdown in STM.
+waitShutdownSTM :: Node -> STM ()
+waitShutdownSTM = readTMVar . nodeShutdown
+
+-- | Get the node Id of a node.
+getNodeId :: Node -> NodeId
+getNodeId = nodeId
 
 -- | Run a node.
 runNode :: NodeM ()
@@ -306,10 +325,13 @@ handleLocalSpawnMessage sourceId entry processId header payload = do
                                   procNode = nodeInfo state }
   asyncThread <- liftIO . async $ do
     maybeException <-
-      catch (do St.evalStateT (let Process _ = entry sourceId header payload
-                                in return ())
+      catch (do St.evalStateT (do let Process action =
+                                        entry sourceId header payload
+                                    in do action
+                                          return ())
                   processInfo
-                return Nothing) $ \e -> return $ Just (e :: SomeException)
+                return Nothing) $
+            (\e -> return $ Just (e :: SomeException))
     atomically . writeTQueue (nodeQueue $ nodeInfo state) $
       EndMessage { endProcessId = processId, endException = maybeException }
   let processState = ProcessState { pstateInfo = processInfo,
@@ -769,7 +791,8 @@ sendRemoteMessage :: NodeId -> RemoteMessage -> NodeM ()
 sendRemoteMessage nid message = do
   state <- St.get
   case M.lookup nid $ nodeRemoteNodes state of
-    Just rnode -> liftIO . atomically $ writeTQueue (rnodeOutput rnode) message
+    Just rnode -> do
+      liftIO . atomically $ writeTQueue (rnodeOutput rnode) message
     Nothing ->
       let index = (flip S.findIndexL) (nodePendingRemoteNodes state) $ \pnode ->
             let pnid = prnodeId pnode
@@ -1078,12 +1101,13 @@ shutdownLocalNode pid header payload = do
   broadcastRemoteMessage RemoteLeaveMessage
   liftIO . atomically $ putTMVar terminate ()
   St.modify $ \state -> state { nodeRemoteNodes = M.empty }
+  liftIO . atomically . (flip putTMVar) () . nodeShutdown . nodeInfo =<< St.get
   
 -- | Start local communication with another node.
 startLocalCommunication :: Node -> NodeM ()
 startLocalCommunication node = do
   output <- liftIO $ atomically newTQueue
-  terminate <- liftIO $ atomically newEmptyTMVar
+  terminate <- nodeTerminate <$> St.get
   let remoteNodeState =
         RemoteNodeState { rnodeId = nodeId node,
                           rnodeOutput = output,
@@ -1092,7 +1116,7 @@ startLocalCommunication node = do
     state { nodeRemoteNodes = M.insert (nodeId node) remoteNodeState $
                               nodeRemoteNodes state }
   selfNid <- nodeId . nodeInfo <$> St.get
-  remoteQueue <- nodeRemoteQueue . nodeInfo <$> St.get
+  let remoteQueue = nodeRemoteQueue node
   (liftIO . async $ runLocalCommunication selfNid output remoteQueue
     terminate) >> return ()
 

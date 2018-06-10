@@ -28,7 +28,8 @@
 -- POSSIBILITY OF SUCH DAMAGE.
 
 {-# LANGUAGE OverloadedStrings, OverloadedLists, RecordWildCards,
-             DeriveGeneric, MultiParamTypeClasses #-}
+             DeriveGeneric, MultiParamTypeClasses,
+             GeneralizedNewtypeDeriving #-}
 
 module Control.Concurrent.Porcupine.Private.Types
 
@@ -106,25 +107,8 @@ import Control.Applicative (Applicative(..))
 import Prelude hiding (fail)
 
 -- | The process monad type
-data Process a = Process (StateT ProcessInfo IO a)
-
--- | The process monad type Functor instance
-instance Functor Process where
-  fmap = liftM
-
--- | The process monad type Applicative instance
-instance Applicative Process where
-  pure = return
-  (<*>) = ap
-
--- | The process monad type Monad instance
-instance Monad Process where
-  (Process x) >>= f = Process (x >>= \value -> let (Process y) = f value in y)
-  return x = Process $ return x
-
--- | The process monad type MonadIO instance
-instance MonadIO Process where
-  liftIO = Process . liftIO
+newtype Process a = Process (StateT ProcessInfo IO a)
+  deriving (Functor, Applicative, Monad, MonadIO)
 
 -- | The entry point type
 type Entry = SourceId -> Header -> Payload -> Process ()
@@ -158,6 +142,7 @@ data Node =
          nodeRemoteQueue :: TQueue RemoteEvent,
          nodeGen :: TVar StdGen,
          nodeNextSequenceNum :: TVar Integer,
+         nodeShutdown :: TMVar (),
          nodeNames :: TVar (HashMap Name (Seq (DestId, Integer))) }
 
 -- | The local node state type

@@ -28,7 +28,8 @@
 -- POSSIBILITY OF SUCH DAMAGE.
 
 {-# LANGUAGE OverloadedStrings, OverloadedLists, RecordWildCards,
-             DeriveGeneric, MultiParamTypeClasses #-}
+             DeriveGeneric, MultiParamTypeClasses,
+             GeneralizedNewtypeDeriving #-}
 
 module Control.Concurrent.Porcupine.Process
 

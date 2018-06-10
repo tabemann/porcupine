@@ -46,8 +46,8 @@ import Control.Monad (forM,
                       (=<<))
 import Data.Functor ((<$>),
                      fmap)
+import Data.Word (Word16)
 import Text.Printf (printf)
-import Control.Concurrent (threadDelay)
 import Prelude hiding (putStrLn)
 
 -- | A simple message receiver.
@@ -100,8 +100,7 @@ simpleMessagingTest0 = do
   PN.waitShutdown node
   putStrLn "The node has shut down"
 
-
--- | A simple mssage sender.
+-- | Another simple mssage sender.
 simpleMessageSender1 :: P.ProcessId -> PN.Node -> P.Process ()
 simpleMessageSender1 pid node = do
   liftIO $ putStrLn "Connecting nodes..."
@@ -139,8 +138,146 @@ simpleMessagingTest1 = do
   PN.waitShutdown node1
   putStrLn "Node 1 has shut down"
 
+-- | Yet another simple mssage sender.
+simpleMessageSender2 :: P.ProcessId -> P.ProcessId -> PN.Node -> P.Process ()
+simpleMessageSender2 pid0 pid1 node = do
+  liftIO $ putStrLn "Connecting nodes..."
+  P.connect node
+  liftIO $ putStrLn "Adding processes to a group..."
+  gid <- P.newGroupId
+  P.subscribeAsProxy gid pid0
+  P.subscribeAsProxy gid pid1
+  liftIO $ putStrLn "Listening for termination..."
+  P.listenEnd $ P.ProcessDest pid0
+  P.listenEnd $ P.ProcessDest pid1
+  liftIO $ putStrLn "Starting to send messages..."
+  forM_ ([1..100] :: S.Seq Integer) $ \n -> do
+    liftIO . putStrLn . T.pack $ printf "Sending %d" n
+    P.send (P.GroupDest gid) (B.encode ("messageText" :: T.Text))
+      (B.encode . T.pack $ printf "%d" n)
+  liftIO $ putStrLn "Sending message requesting quit..."
+  P.send (P.GroupDest gid) (B.encode ("normalQuit" :: T.Text)) BS.empty
+  liftIO $ putStrLn "Waiting for termination..."
+  P.receive [\sid did header payload ->
+               if sid == P.NormalSource pid0 then Just $ return () else Nothing]
+  P.receive [\sid did header payload ->
+               if sid == P.NormalSource pid1 then Just $ return () else Nothing]
+  liftIO $ putStrLn "Shutting down..."
+  P.shutdown' $ PN.getNodeId node
+  nid <- P.myNodeId
+  P.shutdown' nid
+  
+-- | Yet another simple messaging test.
+simpleMessagingTest2 = do
+  putStrLn "Starting node 0..."
+  node0 <- PN.start 0 Nothing BS.empty
+  putStrLn "Starting node 1..."
+  node1 <- PN.start 1 Nothing BS.empty
+  putStrLn "Starting receiver process 0..."
+  receiverPid0 <- P.spawnInit' simpleMessageReceiver node0
+  putStrLn "Starting receiver processs 1..."
+  receiverPid1 <- P.spawnInit' simpleMessageReceiver node1
+  putStrLn "Starting the sender process..."
+  P.spawnInit' (simpleMessageSender2 receiverPid0 receiverPid1 node0) node1
+  PN.waitShutdown node0
+  putStrLn "Node 0 has shut down"
+  PN.waitShutdown node1
+  putStrLn "Node 1 has shut down"
+  
+-- | A simple message receiver.
+simpleMessageReceiver3 :: Integer -> Bool -> P.Process ()
+simpleMessageReceiver3 index shutdownOnQuit = do
+  liftIO $ putStrLn "Starting to receive messages..."
+  loop
+  where loop = do
+          P.receive [\sid did header payload ->
+                       if (B.decode header :: T.Text) == "messageText"
+                       then do
+                         Just . liftIO $ printf "Received %s for %d\n"
+                           (B.decode payload :: T.Text) index
+                       else Nothing,
+                     \sid did header payload ->
+                       if (B.decode header :: T.Text) == "normalQuit"
+                       then Just $ do
+                         liftIO $ putStrLn "Exiting receive process..."
+                         if shutdownOnQuit
+                           then P.shutdown' =<< P.myNodeId
+                           else return ()
+                         P.quit'
+                       else Nothing]
+          loop
+
+-- | Yet another simple mssage sender.
+simpleMessageSender3 :: P.ProcessId -> P.ProcessId -> NS.SockAddr ->
+                        P.Process ()
+simpleMessageSender3 pid0 pid1 address = do
+  liftIO $ putStrLn "Connecting nodes..."
+  P.connectRemote 0 address Nothing
+  liftIO $ putStrLn "Adding processes to a group..."
+  gid <- P.newGroupId
+  P.subscribeAsProxy gid pid0
+  P.subscribeAsProxy gid pid1
+  liftIO $ putStrLn "Listening for termination..."
+  P.listenEnd $ P.ProcessDest pid0
+  P.listenEnd $ P.ProcessDest pid1
+  liftIO $ putStrLn "Starting to send messages..."
+  forM_ ([1..100] :: S.Seq Integer) $ \n -> do
+    liftIO . putStrLn . T.pack $ printf "Sending %d" n
+    P.send (P.GroupDest gid) (B.encode ("messageText" :: T.Text))
+      (B.encode . T.pack $ printf "%d" n)
+  liftIO $ putStrLn "Sending message requesting quit..."
+  P.send (P.GroupDest gid) (B.encode ("normalQuit" :: T.Text)) BS.empty
+  liftIO $ putStrLn "Waiting for termination..."
+  P.receive [\sid did header payload ->
+               if sid == P.NormalSource pid0 then Just $ return () else Nothing]
+  P.receive [\sid did header payload ->
+               if sid == P.NormalSource pid1 then Just $ return () else Nothing]
+  liftIO $ putStrLn "Shutting down..."
+  P.shutdown' =<< P.myNodeId
+
+-- | Yet another simple messaging test.
+simpleMessagingTest3 = do
+  putStrLn "Getting address 0..."
+  address0 <- getSockAddr 6660
+  case address0 of
+    Just address0 -> do
+      putStrLn "Getting address 1..."
+      address1 <- getSockAddr 6661
+      case address1 of
+        Just address1 -> do
+          putStrLn "Starting node 0..."
+          node0 <- PN.start 0 (Just address0) BS.empty
+          putStrLn "Starting node 1..."
+          node1 <- PN.start 1 (Just address1) BS.empty
+          putStrLn "Starting receiver process 0..."
+          receiverPid0 <- P.spawnInit' (simpleMessageReceiver3 0 True) node0
+          putStrLn "Starting receiver processs 1..."
+          receiverPid1 <- P.spawnInit' (simpleMessageReceiver3 1 False) node1
+          putStrLn "Starting the sender process..."
+          P.spawnInit' (simpleMessageSender3 receiverPid0 receiverPid1 address0)
+            node1
+          PN.waitShutdown node0
+          putStrLn "Node 0 has shut down"
+          PN.waitShutdown node1
+          putStrLn "Node 1 has shut down"
+        Nothing -> putStrLn "Did not find address 1"
+    Nothing -> putStrLn "Did not find address 0"
+
+-- | Get socket address for localhost and port.
+getSockAddr :: Word16 -> IO (Maybe NS.SockAddr)
+getSockAddr port = do
+  let hints = NS.defaultHints { NS.addrFlags = [NS.AI_NUMERICSERV],
+                                NS.addrSocketType = NS.Stream }
+  addresses <- NS.getAddrInfo (Just hints) (Just "127.0.0.1")
+               (Just $ printf "%d" port)
+  case addresses of
+    address : _ -> return . Just $ NS.addrAddress address
+    [] -> return Nothing
+  
 -- | The entry point.
 main :: IO ()
 main = do
   --simpleMessagingTest0
-  simpleMessagingTest1
+  --simpleMessagingTest1
+  --simpleMessagingTest2
+  simpleMessagingTest3

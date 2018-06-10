@@ -93,6 +93,10 @@ import Data.Functor ((<$>),
                      fmap)
 import Text.Printf (printf)
 
+-- | The magic value
+magicValue :: Word32
+magicValue = 0x904C0914
+
 -- | Start a node with a given fixed index, optional address, and optional key.
 start :: Integer -> Maybe NS.SockAddr -> Key -> IO Node
 start fixedNum address key = do
@@ -398,27 +402,7 @@ handleLocalKillMessage processId destId header payload = do
 -- | Handle a local subscribe message.
 handleLocalSubscribeMessage :: ProcessId -> GroupId -> NodeM ()
 handleLocalSubscribeMessage pid gid = do
-  state <- St.get
-  case M.lookup gid $ nodeGroups state of
-    Just group ->
-      case S.findIndexL (\(pid', _) -> pid == pid') $
-           groupLocalSubscribers group of
-        Just index -> do
-          updateGroup
-            (\group -> group { groupLocalSubscribers =
-                                 S.adjust (\(pid, count) -> (pid, count + 1))
-                                 index $ groupLocalSubscribers group })
-            gid
-        Nothing -> do
-          updateGroup
-            (\group -> group { groupLocalSubscribers =
-                                 groupLocalSubscribers group |> (pid, 1) })
-            gid
-    Nothing -> do addGroup gid $
-                    GroupState { groupId = gid,
-                                 groupLocalSubscribers = S.singleton (pid, 1),
-                                 groupRemoteSubscribers = S.empty,
-                                 groupEndListeners = S.empty }
+  addSubscriber pid gid
   broadcastRemoteMessage $ RemoteSubscribeMessage { rsubProcessId = pid,
                                                     rsubGroupId = gid }
   runNode
@@ -576,28 +560,8 @@ handleRemoteKillMessage nid processId destId header payload = do
 
 -- | Handle a remote subscribe message.
 handleRemoteSubscribeMessage :: NodeId -> ProcessId -> GroupId -> NodeM ()
-handleRemoteSubscribeMessage nid _ gid = do
-  state <- St.get
-  case M.lookup gid $ nodeGroups state of
-    Just group ->
-      case S.findIndexL (\(nid', _) -> nid == nid') $
-           groupRemoteSubscribers group of
-        Just index -> do
-          updateGroup
-            (\group -> group { groupRemoteSubscribers =
-                                 S.adjust (\(nid, count) -> (nid, count + 1))
-                                 index $ groupRemoteSubscribers group })
-            gid
-        Nothing -> do
-          updateGroup
-            (\group -> group { groupRemoteSubscribers =
-                                 groupRemoteSubscribers group |> (nid, 1) })
-            gid
-    Nothing -> do addGroup gid $
-                    GroupState { groupId = gid,
-                                 groupLocalSubscribers = S.empty,
-                                 groupRemoteSubscribers = S.singleton (nid, 1),
-                                 groupEndListeners = S.empty }
+handleRemoteSubscribeMessage _ pid gid = do
+  addSubscriber pid gid
   runNode
 
 -- | Handle a remote unsubscribe message.
@@ -1102,7 +1066,60 @@ shutdownLocalNode pid header payload = do
   liftIO . atomically $ putTMVar terminate ()
   St.modify $ \state -> state { nodeRemoteNodes = M.empty }
   liftIO . atomically . (flip putTMVar) () . nodeShutdown . nodeInfo =<< St.get
-  
+
+-- | Handle subscribing to a group.
+addSubscriber :: ProcessId -> GroupId -> NodeM ()
+addSubscriber pid gid = do
+  nid <- nodeId . nodeInfo <$> St.get
+  state <- St.get
+  if pidNodeId pid == nid
+    then do
+      case M.lookup gid $ nodeGroups state of
+        Just group ->
+          case S.findIndexL (\(pid', _) -> pid == pid') $
+               groupLocalSubscribers group of
+            Just index -> do
+              updateGroup
+                (\group -> group { groupLocalSubscribers =
+                                   S.adjust (\(pid, count) -> (pid, count + 1))
+                                   index $ groupLocalSubscribers group })
+                gid
+            Nothing -> do
+              updateGroup
+                (\group -> group { groupLocalSubscribers =
+                                   groupLocalSubscribers group |> (pid, 1) })
+                gid
+        Nothing -> do addGroup gid $
+                        GroupState { groupId = gid,
+                                     groupLocalSubscribers =
+                                       S.singleton (pid, 1),
+                                     groupRemoteSubscribers = S.empty,
+                                     groupEndListeners = S.empty }
+    else do
+      case M.lookup gid $ nodeGroups state of
+        Just group ->
+          case S.findIndexL (\(nid', _) -> pidNodeId pid == nid') $
+               groupRemoteSubscribers group of
+            Just index -> do
+              updateGroup
+                (\group -> group { groupRemoteSubscribers =
+                                     S.adjust (\(nid, count) ->
+                                                 (nid, count + 1))
+                                     index $ groupRemoteSubscribers group })
+                gid
+            Nothing -> do
+              updateGroup
+                (\group -> group { groupRemoteSubscribers =
+                                   groupRemoteSubscribers group |>
+                                   (pidNodeId pid, 1) })
+                gid
+        Nothing -> do addGroup gid $
+                        GroupState { groupId = gid,
+                                     groupLocalSubscribers = S.empty,
+                                     groupRemoteSubscribers =
+                                       S.singleton (pidNodeId pid, 1),
+                                     groupEndListeners = S.empty }
+
 -- | Start local communication with another node.
 startLocalCommunication :: Node -> NodeM ()
 startLocalCommunication node = do
@@ -1195,12 +1212,12 @@ runSocket nid output terminate socket buffer = do
   finalizeOutput <- liftIO $ atomically newEmptyTMVar
   liftIO . async $ do
     atomically $ do
-      takeTMVar terminate
-      putTMVar terminateOutput ()
+      readTMVar terminate `orElse` readTMVar terminateOutput
+      tryPutTMVar terminateOutput () >> return ()
     NS.shutdown socket NS.ShutdownReceive
     atomically $ do
-      takeTMVar finalizeInput
-      takeTMVar finalizeOutput
+      readTMVar finalizeInput
+      readTMVar finalizeOutput
     NS.close socket
   input <- nodeRemoteQueue . nodeInfo <$> St.get
   (liftIO . async $ do
@@ -1227,7 +1244,7 @@ runSocketInput' :: NodeId -> TQueue RemoteEvent -> NS.Socket ->
 runSocketInput' nid input socket buffer = do
   if BS.length buffer < 8
     then do block <- BS.fromStrict <$> NSB.recv socket 4096
-            if BS.null block
+            if not $ BS.null block
               then runSocketInput' nid input socket $ BS.append buffer block
               else return ()
     else let (lengthField, rest) = BS.splitAt 8 buffer
@@ -1240,7 +1257,7 @@ runSocketInput'' :: NodeId -> TQueue RemoteEvent -> NS.Socket ->
 runSocketInput'' nid input socket buffer messageLength = do
   if BS.length buffer < messageLength
     then do block <- BS.fromStrict <$> NSB.recv socket 4096
-            if BS.null block
+            if not $ BS.null block
               then runSocketInput'' nid input socket (BS.append buffer block)
                    messageLength
               else return ()
@@ -1286,7 +1303,7 @@ isAlreadyConnected pnid = do
 connectRemote :: PartialNodeId -> NodeM ()
 connectRemote pnid = do
   alreadyConnected <- isAlreadyConnected pnid
-  if alreadyConnected
+  if not alreadyConnected
     then case pnidAddress pnid of
            Just address -> do
              let address' = fromSockAddr' address
@@ -1333,7 +1350,9 @@ handshakeWithSocket nid remoteQueue terminate socket key pnid = do
     let messageData = B.encode $ RemoteHelloMessage { rheloNodeId = nid,
                                                       rheloKey = key }
         messageLengthField = B.encode $ BS.length messageData
-        fullMessageData = BS.append messageLengthField messageData
+        magicField = B.encode magicValue
+        fullMessageData =
+          BS.append magicField $ BS.append messageLengthField messageData
     continue <- catch (do NSB.sendAll socket $ BS.toStrict fullMessageData
                           return True)
                 (\e -> const (return False) (e :: IOException))
@@ -1372,7 +1391,7 @@ handshakeWithSocket' nid remoteQueue terminate socket key buffer pnid
             notifyHandshakeFailure remoteQueue pnid
       else let (magicField, rest) = BS.splitAt 4 buffer
                (lengthField, rest') = BS.splitAt 8 rest
-           in if (B.decode magicField :: Word32) == 0x904C0914
+           in if B.decode magicField == magicValue
               then handshakeWithSocket'' nid remoteQueue terminate socket key
                    rest' (B.decode lengthField :: Int64) pnid success
                    doneShuttingDown

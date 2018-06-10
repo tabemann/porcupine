@@ -93,6 +93,7 @@ import qualified Data.Sequence as S
 import qualified Data.Text as T
 import qualified Data.HashMap.Lazy as M
 import qualified System.Random as R
+import qualified Network.Socket as NS
 import Data.Sequence (ViewL (..))
 import Data.Sequence ((|>))
 import Control.Concurrent (myThreadId,
@@ -109,10 +110,12 @@ import Control.Concurrent.STM.TQueue (TQueue,
                                       newTQueue,
                                       readTQueue,
                                       tryReadTQueue,
-                                      writeQueue)
+                                      writeTQueue)
 import qualified Control.Monad.Trans.State.Strict as St
 import Data.Functor ((<$>))
 import Control.Monad ((=<<))
+import Control.Monad.IO.Class (MonadIO (..))
+import Prelude hiding (lookup)
 
 -- | Get the current process Id.
 myProcessId :: Process ProcessId
@@ -120,7 +123,7 @@ myProcessId = Process $ procId <$> St.get
 
 -- | Get the current node Id.
 myNodeId :: Process NodeId
-myModeId = Process $ nodeId . procNode <$> St.get
+myNodeId = Process $ nodeId . procNode <$> St.get
 
 -- | Spawn a process on the local node without a preexisting process.
 spawnInit :: Entry -> Node -> Header -> Payload -> IO ProcessId
@@ -138,15 +141,15 @@ spawnInit entry node header payload = do
 -- | Spawn a process on the local node without a preexisting process without
 -- instantiation parameters (because they are normally only needed for remote
 -- spawns).
-spawnInit' :: Process a -> Node -> IO ProcessId
-spawnInit' action node = spawnInit (\_ _ -> action) node BS.empty BS.empty
+spawnInit' :: Process () -> Node -> IO ProcessId
+spawnInit' action node = spawnInit (\_ _ _ -> action) node BS.empty BS.empty
 
 -- | Spawn a process on the local node normally.
 spawn :: Entry -> Header -> Payload -> Process ProcessId
-spawn entry node header payload = do
+spawn entry header payload = do
   pid <- myProcessId
   spawnedPid <- newProcessId
-  sendRaw $ SpawnMessage { spawnSourceId = NormalSource pid
+  sendRaw $ SpawnMessage { spawnSourceId = NormalSource pid,
                            spawnEntry = entry,
                            spawnProcessId = spawnedPid,
                            spawnHeader = header,
@@ -155,22 +158,24 @@ spawn entry node header payload = do
 
 -- | Spawn a process on the local node normally without instantiation parameters
 -- (because they are normally only needed for remote spawns).
-spawn' :: Process a -> Process ProcessId
-spawn' action node = spawn (\_ _ _ -> action) BS.empty BS.empty
+spawn' :: Process () -> Process ProcessId
+spawn' action = spawn (\_ _ _ -> action) BS.empty BS.empty
 
 -- | Spawn a process on the local node normally for another process.
 spawnAsProxy :: Entry -> ProcessId -> Header -> Payload -> Process ()
-spawnAsProxy f pid header payload = do
-  sendRaw $ SpawnMessage { spawnSourceId = NoSource pid,
-                           spawnFunc = f,
+spawnAsProxy entry pid header payload = do
+  spawnedPid <- newProcessId
+  sendRaw $ SpawnMessage { spawnSourceId = NormalSource pid,
+                           spawnEntry = entry,
+                           spawnProcessId = spawnedPid,
                            spawnHeader = header,
                            spawnPayload = payload } 
 
 -- | Spawn a process on the local node normally for another process without
 -- instantiation parameters (because they are normally only needed for remote
 -- spawns).
-spawnAsProxy' :: Process a -> ProcessId -> Process ()
-spawnAsProxy' f pid = spawn (\_ _ _ -> action) pid BS.empty BS.empty
+spawnAsProxy' :: Process () -> ProcessId -> Process ()
+spawnAsProxy' action pid = spawnAsProxy (\_ _ _ -> action) pid BS.empty BS.empty
 
 -- | Send a message to a process or group.
 send :: DestId -> Header -> Payload -> Process ()
@@ -182,9 +187,9 @@ send did header payload = do
                           umsgPayload = payload }
   
 -- | Send a message to a process or group for another process.
-sendAsProxy :: DestId -> ProcessId -> Header -> Payload -> Process ()
-sendAsProxy did proxyPid header payload = do
-  sendRaw $ UserMessage { umsgSourceId = proxyPid,
+sendAsProxy :: DestId -> SourceId -> Header -> Payload -> Process ()
+sendAsProxy did sid header payload = do
+  sendRaw $ UserMessage { umsgSourceId = sid,
                           umsgDestId = did,
                           umsgHeader = header,
                           umsgPayload = payload }
@@ -193,7 +198,7 @@ sendAsProxy did proxyPid header payload = do
 quit :: Header -> Payload -> Process ()
 quit header payload = do
   pid <- myProcessId
-  sendRaw $ QuitMessage { quitSourceId = NormalSource pid,
+  sendRaw $ QuitMessage { quitProcessId = pid,
                           quitHeader = header,
                           quitPayload = payload }
   threadId <- liftIO myThreadId
@@ -201,7 +206,7 @@ quit header payload = do
 
 -- | Quit the current process with a generic quit message header and payload.
 quit' :: Process ()
-quit' = quit (B.encode $ "genericQuit" :: T.Text) BS.empty
+quit' = quit (B.encode ("genericQuit" :: T.Text)) BS.empty
 
 -- | Kill another process or process group.
 kill :: DestId -> Header -> Payload -> Process ()
@@ -215,7 +220,7 @@ kill did header payload = do
 -- | Kill another process or process group with a generic kill message header
 -- and payload.
 kill' :: DestId -> Process ()
-kill' did = kill did (B.encode $ "genericKill" :: T.Text) BS.empty
+kill' did = kill did (B.encode ("genericKill" :: T.Text)) BS.empty
 
 -- | Kill another process or process group for another process.
 killAsProxy :: DestId -> ProcessId -> Header -> Payload -> Process ()
@@ -229,7 +234,7 @@ killAsProxy did pid header payload = do
 -- kill message header and payload.
 killAsProxy' :: DestId -> ProcessId -> Process ()
 killAsProxy' did pid =
-  killAsProxy did pid (B.encode $ "genericKill" :: T.Text) BS.empty
+  killAsProxy did pid (B.encode ("genericKill" :: T.Text)) BS.empty
 
 -- | Shutdown a node.
 shutdown :: NodeId -> Header -> Payload -> Process ()
@@ -241,14 +246,13 @@ shutdown nid header payload = do
                               shutPayload = payload }
   myNid <- myNodeId
   if nid == myNid
-    then do
-      tid <- myThreadId
-      killThread tid
+    then do tid <- liftIO myThreadId
+            liftIO $ killThread tid
     else return ()
 
 -- | Shutdown a node with a generic shutdown message header and payload.
 shutdown' :: NodeId -> Process ()
-shutdown' nid = shutdown nid (B.encode $ "genericShutdown" :: T.Text) BS.empty
+shutdown' nid = shutdown nid (B.encode ("genericShutdown" :: T.Text)) BS.empty
 
 -- | Shutdown a node for another process.
 shutdownAsProxy :: NodeId -> ProcessId -> Header -> Payload -> Process ()
@@ -259,16 +263,15 @@ shutdownAsProxy nid pid header payload = do
                               shutPayload = payload }
   myNid <- myNodeId
   if nid == myNid
-    then do
-      tid <- myThreadId
-      killThread tid
+    then do tid <- liftIO myThreadId
+            liftIO $ killThread tid
     else return ()
 
 -- | Shutdown anode for another process with a generic shutdown message header
 -- and payload.
 shutdownAsProxy' :: NodeId -> ProcessId -> Process ()
 shutdownAsProxy' nid pid =
-  shutdownAsProxy nid pid (B.encode $ "genericShutdown" :: T.Text) BS.empty
+  shutdownAsProxy nid pid (B.encode ("genericShutdown" :: T.Text)) BS.empty
 
 -- | Subscribe to a group.
 subscribe :: GroupId -> Process ()
@@ -305,7 +308,7 @@ listenEnd listenedId = do
 
 -- | Stop listening for termination of another process or any member of a group.
 unlistenEnd :: DestId -> Process ()
-unlistenEnd listenedid = do
+unlistenEnd listenedId = do
   pid <- myProcessId
   sendRaw $ UnlistenEndMessage { ulendListenedId = listenedId,
                                  ulendListenerId = ProcessDest pid }
@@ -361,9 +364,9 @@ unassign name did = do
                                  index entries
                   in M.insert name entries' names'
                 | True -> M.insert name (S.deleteAt index entries) names'
-              Nothing -> return names'
-          Nothing -> return return names'
-      Nothing -> return names'
+              Nothing -> names'
+          Nothing -> names'
+      Nothing -> names'
 
 -- | Look up a process or group by name.
 lookup :: Name -> Process (Maybe DestId)
@@ -401,7 +404,7 @@ newProcessIdForNode node = do
   (nextSequenceNum, randomNum) <- newUnique node
   return $ ProcessId { pidSequenceNum = nextSequenceNum,
                        pidRandomNum = randomNum,
-                       piddNodeId = nodeId node }
+                       pidNodeId = nodeId node }
 
 -- | genreate a new node-unique Id.
 newUnique :: Node -> IO (Integer, Integer)
@@ -409,9 +412,9 @@ newUnique node = do
   atomically $ do
     gen <- readTVar $ nodeGen node
     nextSequenceNum <- readTVar $ nodeNextSequenceNum node
-    (randomNum, gen') <- R.random gen
+    let (randomNum, gen') = R.random gen
     writeTVar (nodeGen node) gen'
-    writeTVar (nodeNextSequence node) $ nextSequenceNum + 1
+    writeTVar (nodeNextSequenceNum node) $ nextSequenceNum + 1
     return (nextSequenceNum, randomNum)
 
 -- | Connect to a local node.
@@ -420,26 +423,25 @@ connect node = do
   sendRaw $ ConnectMessage { connNode = node }
 
 -- | Connect to a remote node.
-connectRemote :: Integer -> NS.SockAddr -> Maybe Integer -> Maybe ByteString ->
-                 Process ()
-connectRemote fixedNum address randomNum key = do
+connectRemote :: Integer -> NS.SockAddr -> Maybe Integer -> Process ()
+connectRemote fixedNum address randomNum = do
   let pnid = PartialNodeId { pnidFixedNum = fixedNum,
-                             pnidAddress = Just address,
+                             pnidAddress = Just $ toSockAddr' address,
                              pnidRandomNum = randomNum }
-  sendRaw $ ConnectRemoteMessage { conrNodeId = pnid,
-                                   conrKey = key }
+  sendRaw $ ConnectRemoteMessage { conrNodeId = pnid }
 
 -- | Do the basic work of sending a message.
 sendRaw :: Message -> Process ()
 sendRaw message = do
   node <- Process $ procNode <$> St.get
-  liftIO . atomically $ writeTQueue (nodeQueue $ procNode processInfo) message
+  liftIO . atomically $ writeTQueue (nodeQueue node) message
 
 -- | Read messages from the queue.
 receive :: S.Seq (Handler a) -> Process a
 receive options = do
-  alreadyReceived <- liftIO . atomically . readTVar $ procExtra processInfo
-  found <- matchAndExecutePrefound alreadyReceived
+  alreadyReceived <- liftIO . atomically . readTVar . procExtra =<<
+                     Process St.get
+  found <- matchAndExecutePrefound options alreadyReceived
   case found of
     Just found -> return found
     Nothing -> matchUntilFoundThenExecute
@@ -457,8 +459,9 @@ receive options = do
 -- | Read messages from the queue.
 tryReceive :: S.Seq (Handler a) -> Process (Maybe a)
 tryReceive options = do
-  alreadyReceived <- liftIO . atomically . readTVar $ procExtra processInfo
-  found <- matchAndExecutePrefound alreadyReceived
+  alreadyReceived <- liftIO . atomically . readTVar . procExtra =<<
+                     Process St.get
+  found <- matchAndExecutePrefound options alreadyReceived
   case found of
     Just found -> return $ Just found
     Nothing -> tryMatchThenExecute
@@ -489,9 +492,9 @@ matchAndExecutePrefound options messages = matchAndExecutePrefound' messages 0
                   processInfo <- Process St.get
                   liftIO . atomically $
                     writeTVar (procExtra processInfo)
-                    (S.deleteAt index alreadyReceived)
+                    (S.deleteAt index messages)
                   Just <$> action
-                Nothing -> checkAlreadyReceived rest $ index + 1
+                Nothing -> matchAndExecutePrefound' rest $ index + 1
             EmptyL -> return Nothing
 
 -- | Match a message against a set of options
@@ -500,8 +503,8 @@ match options message =
   case message of
     UserMessage {..} ->
       case S.viewl options of
-        (select, action) :< rest ->
-          case select message of
+        handler :< rest ->
+          case handler umsgSourceId umsgDestId umsgHeader umsgPayload of
             action@(Just _) -> action
             Nothing -> match rest message
         EmptyL -> Nothing

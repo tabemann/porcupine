@@ -50,6 +50,7 @@ module Control.Concurrent.Porcupine.Private.Types
    ProcessId (..),
    NodeId (..),
    PartialNodeId (..),
+   partialNodeIdOfNodeId,
    SockAddr' (..),
    toSockAddr',
    fromSockAddr',

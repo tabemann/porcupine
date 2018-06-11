@@ -91,7 +91,11 @@ import Control.Monad (forM,
                       (=<<))
 import Data.Functor ((<$>),
                      fmap)
+import Data.Foldable (foldl',
+                      toList)
+import Data.Monoid (mconcat)
 import Text.Printf (printf)
+import Debug.Trace (trace)
 
 -- | The magic value
 magicValue :: Word32
@@ -112,6 +116,7 @@ start fixedNum address key = do
   nextSequenceNum <- atomically $ newTVar 0
   terminate <- atomically newEmptyTMVar
   shutdown <- atomically newEmptyTMVar
+  listenShutdown <- atomically newEmptyTMVar
   let info = Node { nodeId = nid,
                     nodeQueue = queue,
                     nodeRemoteQueue = remoteQueue,
@@ -123,6 +128,7 @@ start fixedNum address key = do
                               nodeKey = key,
                               nodeReadOrder = False,
                               nodeTerminate = terminate,
+                              nodeListenShutdown = listenShutdown,
                               nodeProcesses = M.empty,
                               nodeLocalNodes = M.empty,
                               nodeRemoteNodes = M.empty,
@@ -130,7 +136,8 @@ start fixedNum address key = do
                               nodeGroups = M.empty }
   async $ St.runStateT runNode nodeState >> return ()
   case address of
-    Just address -> startListen nid address remoteQueue terminate key
+    Just address -> startListen nid address remoteQueue terminate listenShutdown
+                    key
     Nothing -> return ()
   return info
 
@@ -203,42 +210,58 @@ handleLocalMessage JoinMessage{..} =
 
 -- | Handle a remote event.
 handleRemoteEvent :: RemoteEvent -> NodeM ()
-handleRemoteEvent RemoteConnected{..} =
+handleRemoteEvent RemoteConnected{..} = do
+  liftIO . printf "GOT RemoteConnected FROM %s\n" $ show rconNodeId
   handleRemoteConnected rconNodeId rconSocket rconBuffer
-handleRemoteEvent RemoteConnectFailed{..} =
+handleRemoteEvent RemoteConnectFailed{..} = do
+  liftIO . printf "GOT RemoteConnectFailed FROM %s\n" $ show rcflNodeId
   handleRemoteConnectFailed rcflNodeId
-handleRemoteEvent RemoteReceived{..} =
+handleRemoteEvent RemoteReceived{..} =  
   handleRemoteMessage recvNodeId recvMessage
-handleRemoteEvent RemoteDisconnected{..} =
+handleRemoteEvent RemoteDisconnected{..} = do
+  liftIO . printf "GOT RemoteDisconnected FROM %s\n" $ show dconNodeId
   handleRemoteDisconnected dconNodeId
 
 -- | Handle a remote message.
 handleRemoteMessage :: NodeId -> RemoteMessage -> NodeM ()
-handleRemoteMessage nodeId RemoteUserMessage{..} =
+handleRemoteMessage nodeId RemoteUserMessage{..} = do
+  liftIO $ printf "GOT RemoteUserMessage FROM %s WITH %s\n" (show nodeId)
+    (B.decode rumsgHeader :: T.Text)
   handleRemoteUserMessage nodeId rumsgSourceId rumsgDestId rumsgHeader
-  rumsgPayload
-handleRemoteMessage nodeId RemoteEndMessage{..} =
+    rumsgPayload
+handleRemoteMessage nodeId RemoteEndMessage{..} = do
+  liftIO . printf "GOT RemoteEndMessage FROM %s" $ show nodeId
   handleRemoteEndMessage nodeId rendSourceId rendHeader rendPayload
-handleRemoteMessage nodeId RemoteKillMessage{..} =
+handleRemoteMessage nodeId RemoteKillMessage{..} = do
+  liftIO . printf "GOT RemoteKillMessage FROM %s" $ show nodeId
   handleRemoteKillMessage nodeId rkillProcessId rkillDestId rkillHeader
-  rkillPayload
-handleRemoteMessage nodeId RemoteSubscribeMessage{..} =
+    rkillPayload
+handleRemoteMessage nodeId RemoteSubscribeMessage{..} = do
+  liftIO . printf "GOT RemoteSubscribeMessage FROM %s" $ show nodeId
   handleRemoteSubscribeMessage nodeId rsubProcessId rsubGroupId
-handleRemoteMessage nodeId RemoteUnsubscribeMessage{..} =
+handleRemoteMessage nodeId RemoteUnsubscribeMessage{..} = do
+  liftIO . printf "GOT RemoteUnsubscribeMessage FROM %s" $ show nodeId
   handleRemoteUnsubscribeMessage nodeId rusubProcessId rusubGroupId
-handleRemoteMessage nodeId RemoteAssignMessage{..} =
+handleRemoteMessage nodeId RemoteAssignMessage{..} = do
+  liftIO . printf "GOT RemoteAssignMessage FROM %s" $ show nodeId
   handleRemoteAssignMessage nodeId rassName rassDestId
-handleRemoteMessage nodeId RemoteUnassignMessage{..} =
+handleRemoteMessage nodeId RemoteUnassignMessage{..} = do
+  liftIO . printf "GOT RemoteUnassignMessage FROM %s" $ show nodeId
   handleRemoteUnassignMessage nodeId ruassName ruassDestId
-handleRemoteMessage nodeId RemoteShutdownMessage{..} =
+handleRemoteMessage nodeId RemoteShutdownMessage{..} = do
+  liftIO . printf "GOT RemoteShutdownMessage FROM %s" $ show nodeId
   handleRemoteShutdownMessage nodeId rshutProcessId rshutHeader rshutPayload
-handleRemoteMessage nodeId RemoteHelloMessage{..} =
+handleRemoteMessage nodeId RemoteHelloMessage{..} = do
+  liftIO . printf "GOT RemoteHelloMessage FROM %s" $ show nodeId
   handleRemoteHelloMessage nodeId rheloNodeId rheloKey
-handleRemoteMessage nodeId RemoteListenEndMessage{..} =
+handleRemoteMessage nodeId RemoteListenEndMessage{..} = do
+  liftIO . printf "GOT RemoteListenEndMessage FROM %s" $ show nodeId
   handleRemoteListenEndMessage nodeId rlendListenedId rlendListenerId
-handleRemoteMessage nodeId RemoteUnlistenEndMessage{..} =
+handleRemoteMessage nodeId RemoteUnlistenEndMessage{..} = do
+  liftIO . printf "GOT RemoteUnlistenEndMessage FROM %s" $ show nodeId
   handleRemoteUnlistenEndMessage nodeId rulendListenedId rulendListenerId
-handleRemoteMessage nodeId RemoteJoinMessage{..} =
+handleRemoteMessage nodeId RemoteJoinMessage{..} = do
+  liftIO . printf "GOT RemoteJoinMessage FROM %s" $ show nodeId
   handleRemoteJoinMessage nodeId rjoinNodeId
 
 -- | Handle a remote connected event.
@@ -275,6 +298,7 @@ handleRemoteConnected nid socket buffer = do
       return output
   runSocket nid output terminate socket buffer
   updateRemoteNames nid
+  updateRemoteGroups nid
   runNode
 
 -- | Handle a remote connect failed event.
@@ -422,7 +446,7 @@ handleLocalUnsubscribeMessage pid gid = do
                   updateGroup
                     (\group ->
                         group { groupLocalSubscribers =
-                                  S.adjust (\(pid, count) -> (pid, count - 1))
+                                  S.adjust' (\(pid, count) -> (pid, count - 1))
                                   index $ groupLocalSubscribers group })
                     gid
               | True -> do
@@ -526,6 +550,7 @@ handleLocalHelloMessage node = do
     Nothing -> connectLocal node
     Just _ -> return ()
   updateRemoteNames $ nodeId node
+  updateRemoteGroups $ nodeId node
   runNode
 
 -- | Handle a local join message.
@@ -569,7 +594,7 @@ handleRemoteUnsubscribeMessage :: NodeId -> ProcessId -> GroupId -> NodeM ()
 handleRemoteUnsubscribeMessage nid _ gid = do
   state <- St.get
   case M.lookup gid $ nodeGroups state of
-    Just group ->
+    Just group -> do
       case S.findIndexL (\(nid', _) -> nid == nid') $
            groupRemoteSubscribers group of
         Just index ->
@@ -579,7 +604,7 @@ handleRemoteUnsubscribeMessage nid _ gid = do
                 updateGroup
                   (\group ->
                      group { groupRemoteSubscribers =
-                               S.adjust (\(nid, count) -> (nid, count - 1))
+                               S.adjust' (\(nid, count) -> (nid, count - 1))
                                index $ groupRemoteSubscribers group })
                   gid
               | True -> do
@@ -591,6 +616,19 @@ handleRemoteUnsubscribeMessage nid _ gid = do
                     gid
             Nothing -> error "impossible"
         Nothing -> return ()
+      forM_ (groupEndListeners group) $ \(did, count) -> do
+        updateRemoteNode
+          (\node ->
+              node { rnodeEndListeners = mconcat . toList $ fmap
+                                         (\endListener@(did', count') ->
+                                             if did == did'
+                                             then if count' > 1
+                                                  then S.singleton
+                                                       (did', count' - count)
+                                                  else S.empty
+                                             else S.singleton endListener)
+                                         (rnodeEndListeners node) })
+          nid
     Nothing -> return ()
   runNode
 
@@ -605,7 +643,7 @@ handleRemoteAssignMessage _ name did = do
         case S.findIndexL (\(did', _) -> did == did') entries of
           Just index ->
             let entries' =
-                  S.adjust (\(did', count) -> (did', count + 1)) index entries
+                  S.adjust' (\(did', count) -> (did', count + 1)) index entries
             in M.insert name entries' names'
           Nothing -> M.insert name (entries |> (did, 1)) names'
       Nothing -> M.insert name (S.singleton (did, 1)) names'
@@ -624,7 +662,7 @@ handleRemoteUnassignMessage _ name did = do
             case S.lookup index entries of
               Just (_, count)
                 | count > 1 ->
-                  let entries' = S.adjust (\(did', count) -> (did', count - 1))
+                  let entries' = S.adjust' (\(did', count) -> (did', count - 1))
                                  index entries
                   in M.insert name entries' names'
                 | True -> M.insert name (S.deleteAt index entries) names'
@@ -953,7 +991,7 @@ registerLocalProcessEndListener pid listenerId = do
              pstateEndListeners process of
           Just index ->
             process { pstateEndListeners =
-                        S.adjust (\(did, count) -> (did, count + 1))
+                        S.adjust' (\(did, count) -> (did, count + 1))
                         index $ pstateEndListeners process }
           Nothing ->
             process { pstateEndListeners = pstateEndListeners process |>
@@ -969,7 +1007,7 @@ registerRemoteNodeEndListener nid listenerId = do
              rnodeEndListeners rnode of
           Just index ->
             rnode { rnodeEndListeners =
-                      S.adjust (\(did, count) -> (did, count + 1))
+                      S.adjust' (\(did, count) -> (did, count + 1))
                       index $ rnodeEndListeners rnode }
           Nothing ->
             rnode { rnodeEndListeners = rnodeEndListeners rnode |>
@@ -985,7 +1023,7 @@ registerGroupEndListener gid listenerId = do
              groupEndListeners group of
           Just index ->
             group { groupEndListeners =
-                      S.adjust (\(did, count) -> (did, count + 1))
+                      S.adjust' (\(did, count) -> (did, count + 1))
                       index $ groupEndListeners group }
           Nothing ->
             group { groupEndListeners = groupEndListeners group |>
@@ -1004,7 +1042,7 @@ unregisterLocalProcessEndListener pid listenerId = do
              Just (_, count)
                | count > 1 ->
                  process { pstateEndListeners =
-                             S.adjust (\(did, count) -> (did, count - 1))
+                             S.adjust' (\(did, count) -> (did, count - 1))
                              index $ pstateEndListeners process }
                | True ->
                  process { pstateEndListeners =
@@ -1025,7 +1063,7 @@ unregisterRemoteNodeEndListener nid listenerId = do
              Just (_, count)
                | count > 1 ->
                  rnode { rnodeEndListeners =
-                             S.adjust (\(did, count) -> (did, count - 1))
+                             S.adjust' (\(did, count) -> (did, count - 1))
                              index $ rnodeEndListeners rnode }
                | True ->
                  rnode { rnodeEndListeners =
@@ -1046,7 +1084,7 @@ unregisterGroupEndListener gid listenerId = do
              Just (_, count)
                | count > 1 ->
                  group { groupEndListeners =
-                             S.adjust (\(did, count) -> (did, count - 1))
+                             S.adjust' (\(did, count) -> (did, count - 1))
                              index $ groupEndListeners group }
                | True ->
                  group { groupEndListeners =
@@ -1065,6 +1103,10 @@ shutdownLocalNode pid header payload = do
   broadcastRemoteMessage RemoteLeaveMessage
   liftIO . atomically $ putTMVar terminate ()
   St.modify $ \state -> state { nodeRemoteNodes = M.empty }
+  nid <- nodeId . nodeInfo <$> St.get
+  case nidAddress nid of
+    Just _ -> liftIO . atomically . readTMVar . nodeListenShutdown =<< St.get
+    Nothing -> return ()
   liftIO . atomically . (flip putTMVar) () . nodeShutdown . nodeInfo =<< St.get
 
 -- | Handle subscribing to a group.
@@ -1081,7 +1123,7 @@ addSubscriber pid gid = do
             Just index -> do
               updateGroup
                 (\group -> group { groupLocalSubscribers =
-                                   S.adjust (\(pid, count) -> (pid, count + 1))
+                                   S.adjust' (\(pid, count) -> (pid, count + 1))
                                    index $ groupLocalSubscribers group })
                 gid
             Nothing -> do
@@ -1097,13 +1139,13 @@ addSubscriber pid gid = do
                                      groupEndListeners = S.empty }
     else do
       case M.lookup gid $ nodeGroups state of
-        Just group ->
+        Just group -> do
           case S.findIndexL (\(nid', _) -> pidNodeId pid == nid') $
                groupRemoteSubscribers group of
             Just index -> do
               updateGroup
                 (\group -> group { groupRemoteSubscribers =
-                                     S.adjust (\(nid, count) ->
+                                     S.adjust' (\(nid, count) ->
                                                  (nid, count + 1))
                                      index $ groupRemoteSubscribers group })
                 gid
@@ -1113,13 +1155,30 @@ addSubscriber pid gid = do
                                    groupRemoteSubscribers group |>
                                    (pidNodeId pid, 1) })
                 gid
+          forM_ (groupEndListeners group) $ \(did, count) -> do
+            updateRemoteNode
+              (\node ->
+                 case S.findIndexL (\(did', _) -> did == did') $
+                      rnodeEndListeners node of
+                   Just index ->
+                     case S.lookup index $ rnodeEndListeners node of
+                       Just (_, count') ->
+                         node { rnodeEndListeners =
+                                  S.adjust'
+                                  (\(did, count') -> (did, count + count'))
+                                  index $ rnodeEndListeners node }
+                       Nothing -> error "impossible"
+                   Nothing ->
+                     node { rnodeEndListeners = rnodeEndListeners node |>
+                                                (did, 1) })
+              (pidNodeId pid)
         Nothing -> do addGroup gid $
                         GroupState { groupId = gid,
                                      groupLocalSubscribers = S.empty,
                                      groupRemoteSubscribers =
                                        S.singleton (pidNodeId pid, 1),
                                      groupEndListeners = S.empty }
-
+      
 -- | Start local communication with another node.
 startLocalCommunication :: Node -> NodeM ()
 startLocalCommunication node = do
@@ -1236,7 +1295,7 @@ runSocketInput nid input terminate finalize socket buffer = do
   atomically $ do
     writeTQueue input $ RemoteDisconnected { dconNodeId = nid }
     tryPutTMVar terminate () >> return ()
-    putTMVar finalize ()
+    tryPutTMVar finalize () >> return ()
 
 -- | Actually run socket input
 runSocketInput' :: NodeId -> TQueue RemoteEvent -> NS.Socket ->
@@ -1284,9 +1343,9 @@ runSocketOutput nid input terminate finalize socket = do
       if continue
         then runSocketOutput nid input terminate finalize socket
         else do NS.shutdown socket NS.ShutdownBoth
-                atomically $ putTMVar finalize ()
+                atomically $ (tryPutTMVar finalize () >> return ())
     Left () -> do NS.shutdown socket NS.ShutdownBoth
-                  atomically $ putTMVar finalize ()
+                  atomically $ (tryPutTMVar finalize () >> return ())
 
 -- | See if a connection already exists with a node.
 isAlreadyConnected :: PartialNodeId -> NodeM Bool
@@ -1465,9 +1524,9 @@ familyOfSockAddr (NS.SockAddrUnix _) = NS.AF_UNIX
 familyOfSockAddr _ = error "not supported"
         
 -- | Start listening for incoming connections
-startListen :: NodeId -> NS.SockAddr -> TQueue RemoteEvent -> TMVar () -> Key ->
-               IO ()
-startListen nid address remoteQueue terminate key = do
+startListen :: NodeId -> NS.SockAddr -> TQueue RemoteEvent -> TMVar () ->
+               TMVar () -> Key -> IO ()
+startListen nid address remoteQueue terminate listenShutdown key = do
   socket <- NS.socket (familyOfSockAddr address) NS.Stream NS.defaultProtocol
   NS.bind socket address
   NS.listen socket 5
@@ -1476,13 +1535,14 @@ startListen nid address remoteQueue terminate key = do
     (atomically $ readTMVar terminate) >> return ()
     NS.shutdown socket NS.ShutdownBoth
     atomically $ putTMVar doneShuttingDown ()
-  (async $ runListen nid remoteQueue socket terminate doneShuttingDown key) >>
-    return ()
+  (async $ runListen nid remoteQueue socket terminate doneShuttingDown
+    listenShutdown key) >> return ()
 
 -- | Run listening for incoming connections.
 runListen :: NodeId -> TQueue RemoteEvent -> NS.Socket -> TMVar () ->
-             TMVar () -> Key -> IO ()
-runListen nid remoteQueue socket terminate doneShuttingDown key = do
+             TMVar () -> TMVar () -> Key -> IO ()
+runListen nid remoteQueue socket terminate doneShuttingDown listenShutdown
+  key = do
   continue <- (== Nothing) <$> (atomically $ tryReadTMVar terminate)
   if continue
     then do
@@ -1491,15 +1551,16 @@ runListen nid remoteQueue socket terminate doneShuttingDown key = do
       case result of
         Just (socket', _) -> do
           handshakeWithSocket nid remoteQueue terminate socket' key Nothing
-          runListen nid remoteQueue socket terminate doneShuttingDown key
+          runListen nid remoteQueue socket terminate doneShuttingDown
+            listenShutdown key
         Nothing -> do
-          (atomically $ tryPutTMVar terminate ()) >> return ()
           atomically $ readTMVar doneShuttingDown
           NS.close socket
+          (atomically $ tryPutTMVar listenShutdown ()) >> return ()
     else do
-      (atomically $ tryPutTMVar terminate ()) >> return ()
       atomically $ readTMVar doneShuttingDown
       NS.close socket
+      (atomically $ tryPutTMVar listenShutdown ()) >> return ()
 
 -- | Update assigned names for remote node.
 updateRemoteNames :: NodeId -> NodeM ()
@@ -1513,3 +1574,20 @@ updateRemoteNames nid = do
             sendRemoteMessage nid $ RemoteAssignMessage { rassName = name,
                                                           rassDestId = did }
       Nothing -> error "impossible"
+
+-- | Update groups for remote node.
+updateRemoteGroups :: NodeId -> NodeM ()
+updateRemoteGroups nid = do
+  groups <- nodeGroups <$> St.get
+  forM_ (M.elems groups) $ \group -> do
+    forM_ (groupLocalSubscribers group) $ \(pid, count) -> do
+      replicateM (fromIntegral count) $
+        sendRemoteMessage nid $ RemoteSubscribeMessage { rsubProcessId = pid,
+                                                         rsubGroupId =
+                                                           groupId group }
+    forM_ (groupEndListeners group) $ \(did, count) -> do
+      replicateM (fromIntegral count) $
+        sendRemoteMessage nid $
+          RemoteListenEndMessage { rlendListenedId = GroupDest $ groupId group,
+                                   rlendListenerId = did }
+

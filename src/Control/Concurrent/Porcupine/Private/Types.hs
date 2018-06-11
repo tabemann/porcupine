@@ -151,6 +151,7 @@ data NodeState =
               nodeKey :: Key,
               nodeReadOrder :: Bool,
               nodeTerminate :: TMVar (),
+              nodeListenShutdown :: TMVar (),
               nodeProcesses :: HashMap ProcessId ProcessState,
               nodeLocalNodes :: HashMap NodeId Node,
               nodeRemoteNodes :: HashMap NodeId RemoteNodeState,
@@ -509,8 +510,15 @@ instance Binary SourceId where
                                             causeCauseId = causeId }
              _ -> fail "invalid source id serialization"
 
--- | The group Id Hashable instance
+-- | The source Id Hashable instance
 instance Hashable SourceId
+
+-- | The source Id Show instance
+instance Show SourceId where
+  show NoSource = "nosource"
+  show (NormalSource pid) = printf "source:%s" $ show pid
+  show CauseSource{..} = printf "source:%s;cause:%s" (show causeSourceId)
+                         (show causeCauseId)
 
 -- | The message destination type
 data DestId = ProcessDest ProcessId
@@ -531,6 +539,11 @@ instance Binary DestId where
 
 -- | The message destination type Hashable instance
 instance Hashable DestId
+
+-- | The message destination Show instance
+instance Show DestId where
+  show (ProcessDest pid) = printf "process:%s" $ show pid
+  show (GroupDest gid) = printf "group:%s" $ show gid
 
 -- | The remote event type
 data RemoteEvent = RemoteConnected { rconNodeId :: NodeId,

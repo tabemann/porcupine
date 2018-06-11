@@ -228,10 +228,12 @@ simpleMessageSender3 pid0 pid1 address = do
   liftIO $ putStrLn "Sending message requesting quit..."
   P.send (P.GroupDest gid) (B.encode ("normalQuit" :: T.Text)) BS.empty
   liftIO $ putStrLn "Waiting for termination..."
-  P.receive [\sid did header payload ->
-               if sid == P.NormalSource pid0 then Just $ return () else Nothing]
-  P.receive [\sid did header payload ->
-               if sid == P.NormalSource pid1 then Just $ return () else Nothing]
+  replicateM 2 $ do
+    P.receive [\sid did header payload ->
+                 if header == B.encode ("remoteDisconnected" :: T.Text) ||
+                    header == B.encode ("genericQuit" :: T.Text)
+                 then Just . liftIO $ putStrLn "Received end"
+                 else Nothing]
   liftIO $ putStrLn "Shutting down..."
   P.shutdown' =<< P.myNodeId
 

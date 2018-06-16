@@ -59,7 +59,7 @@ module Control.Concurrent.Porcupine.Private.Types
    Message (..),
    SourceId (..),
    DestId (..),
-   RemoteEvent (..),
+   Event (..),
    RemoteMessage (..),
    UserRemoteConnectFailed (..),
    UserRemoteDisconnected (..))
@@ -67,7 +67,7 @@ module Control.Concurrent.Porcupine.Private.Types
 where
 
 import Control.Concurrent.Async (Async)
-import Data.ByteString.Lazy (ByteString)
+import Data.ByteString (ByteString)
 import Data.Sequence (Seq)
 import Control.Concurrent.STM (TVar)
 import Control.Concurrent.STM.TQueue (TQueue)
@@ -130,70 +130,68 @@ type Key = ByteString
 
 -- | The process information type
 data ProcessInfo =
-  ProcessInfo { procId :: ProcessId,
-                procQueue :: TQueue Message,
-                procExtra :: TVar (Seq Message),
-                procNode :: Node }
+  ProcessInfo { procId :: !ProcessId,
+                procQueue :: !(TQueue Message),
+                procExtra :: !(TVar (Seq Message)),
+                procNode :: !Node }
 
 -- | The local node information type
 data Node =
-  Node { nodeId :: NodeId,
-         nodeQueue :: TQueue Message,
-         nodeRemoteQueue :: TQueue RemoteEvent,
-         nodeGen :: TVar StdGen,
-         nodeNextSequenceNum :: TVar Integer,
-         nodeShutdown :: TMVar (),
-         nodeNames :: TVar (HashMap Name (Seq (DestId, Integer))) }
+  Node { nodeId :: !NodeId,
+         nodeQueue :: !(TQueue Event),
+         nodeGen :: !(TVar StdGen),
+         nodeNextSequenceNum :: !(TVar Integer),
+         nodeShutdown :: !(TMVar ()),
+         nodeNames :: !(TVar (HashMap Name (Seq (DestId, Integer)))) }
 
 -- | The local node state type
 data NodeState =
-  NodeState { nodeInfo :: Node,
-              nodeKey :: Key,
-              nodeReadOrder :: Bool,
-              nodeTerminate :: TMVar (),
-              nodeListenShutdown :: TMVar (),
-              nodeProcesses :: HashMap ProcessId ProcessState,
-              nodeLocalNodes :: HashMap NodeId Node,
-              nodeRemoteNodes :: HashMap NodeId RemoteNodeState,
-              nodePendingRemoteNodes :: Seq PendingRemoteNodeState,
-              nodeGroups :: HashMap GroupId GroupState }
+  NodeState { nodeInfo :: !Node,
+              nodeKey :: !Key,
+              nodeTerminate :: !(TMVar ()),
+              nodeListenShutdown :: !(TMVar ()),
+              nodeProcesses :: !(HashMap ProcessId ProcessState),
+              nodeLocalNodes :: !(HashMap NodeId Node),
+              nodeRemoteNodes :: !(HashMap NodeId RemoteNodeState),
+              nodePendingRemoteNodes :: !(Seq PendingRemoteNodeState),
+              nodeGroups :: !(HashMap GroupId GroupState) }
 
 -- | A node state monad convenience type
 type NodeM a = StateT NodeState IO a
 
 -- | The process state type
 data ProcessState =
-  ProcessState { pstateInfo :: ProcessInfo,
-                 pstateAsync :: Async (),
-                 pstateTerminating :: Bool,
-                 pstateEndMessage :: Maybe (Header, Payload),
-                 pstateEndCause :: Maybe ProcessId,
-                 pstateEndListeners :: Seq (DestId, Integer) }
+  ProcessState { pstateInfo :: !ProcessInfo,
+                 pstateAsync :: !(Async ()),
+                 pstateTerminating :: !Bool,
+                 pstateEndMessage :: !(Maybe (Header, Payload)),
+                 pstateEndCause :: !(Maybe ProcessId),
+                 pstateEndListeners :: !(Seq (DestId, Integer)) }
 
 -- | The group state type
 data GroupState =
-  GroupState { groupId :: GroupId,
-               groupLocalSubscribers :: Seq (ProcessId, Integer),
-               groupRemoteSubscribers :: Seq (NodeId, Integer),
-               groupEndListeners :: Seq (DestId, Integer) }
+  GroupState { groupId :: !GroupId,
+               groupLocalSubscribers :: !(Seq (ProcessId, Integer)),
+               groupRemoteSubscribers :: !(Seq (NodeId, Integer)),
+               groupEndListeners :: !(Seq (DestId, Integer)) }
 
 -- | The remote node state type
 data RemoteNodeState =
-  RemoteNodeState { rnodeId :: NodeId,
-                    rnodeOutput :: TQueue RemoteMessage,
-                    rnodeEndListeners :: Seq (DestId, Integer) }
+  RemoteNodeState { rnodeId :: !NodeId,
+                    rnodeOutput :: !(TQueue RemoteMessage),
+                    rnodeEndListeners :: !(Seq (DestId, Integer)) }
 
 -- | The pending remote node state type
 data PendingRemoteNodeState =
-  PendingRemoteNodeState { prnodeId :: PartialNodeId,
-                           prnodeOutput :: TQueue RemoteMessage,
-                           prnodeEndListeners :: Seq (DestId, Integer) }
+  PendingRemoteNodeState { prnodeId :: !PartialNodeId,
+                           prnodeOutput :: !(TQueue RemoteMessage),
+                           prnodeEndListeners :: !(Seq (DestId, Integer)) }
 
 -- | The process Id type
 data ProcessId =
-  ProcessId { pidSequenceNum :: Integer,
-              pidRandomNum :: Integer,
-              pidNodeId :: NodeId }
+  ProcessId { pidSequenceNum :: !Integer,
+              pidRandomNum :: !Integer,
+              pidNodeId :: !NodeId }
   deriving (Eq, Ord, Generic)
 
 -- | THe process Id Show instance
@@ -218,9 +216,9 @@ instance Hashable ProcessId
 
 -- | The node Id type
 data NodeId =
-  NodeId { nidFixedNum :: Integer,
-           nidAddress :: Maybe SockAddr',
-           nidRandomNum :: Integer }
+  NodeId { nidFixedNum :: !Integer,
+           nidAddress :: !(Maybe SockAddr'),
+           nidRandomNum :: !Integer }
   deriving (Eq, Ord, Generic)
 
 -- | The node Id Show instance
@@ -255,9 +253,9 @@ instance Hashable NodeId
 
 -- | The partial node Id type
 data PartialNodeId =
-  PartialNodeId { pnidFixedNum :: Integer,
-                  pnidAddress :: Maybe SockAddr',
-                  pnidRandomNum :: Maybe Integer }
+  PartialNodeId { pnidFixedNum :: !Integer,
+                  pnidAddress :: !(Maybe SockAddr'),
+                  pnidRandomNum :: !(Maybe Integer) }
   deriving (Eq, Ord, Generic)
 
 -- | The partial node Id Show instance
@@ -314,9 +312,9 @@ type PortNumber' = Word16
 type HostAddress' = (Word8, Word8, Word8, Word8)
 
 -- | A new SockAddr type
-data SockAddr' = SockAddrInet' PortNumber' HostAddress'
-               | SockAddrInet6' PortNumber' FlowInfo HostAddress6 ScopeID
-               | SockAddrUnix' String
+data SockAddr' = SockAddrInet' !PortNumber' !HostAddress'
+               | SockAddrInet6' !PortNumber' !FlowInfo !HostAddress6 !ScopeID
+               | SockAddrUnix' !String
                deriving (Generic)
 
 -- | Convert a SockAddr to a new SockAddr
@@ -410,9 +408,9 @@ instance Hashable SockAddr'
 
 -- | The group Id type
 data GroupId =
-  GroupId { gidSequenceNum :: Integer,
-            gidRandomNum :: Integer,
-            gidOriginalNodeId :: Maybe NodeId }
+  GroupId { gidSequenceNum :: !Integer,
+            gidRandomNum :: !Integer,
+            gidOriginalNodeId :: !(Maybe NodeId) }
   deriving (Eq, Ord, Generic)
 
 -- | The group Id Show instance
@@ -446,50 +444,50 @@ instance Binary GroupId where
 instance Hashable GroupId
 
 -- | The message type
-data Message = UserMessage { umsgSourceId :: SourceId,
-                             umsgDestId :: DestId,
-                             umsgHeader :: Header,
-                             umsgPayload :: Payload }
-             | SpawnMessage { spawnSourceId :: SourceId,
-                              spawnEntry :: Entry,
-                              spawnProcessId :: ProcessId,
-                              spawnHeader :: Header,
-                              spawnPayload :: Payload }
-             | QuitMessage { quitProcessId :: ProcessId,
-                             quitHeader :: Header,
-                             quitPayload :: Payload }
-             | EndMessage { endProcessId :: ProcessId,
-                            endException :: Maybe SomeException }
-             | KillMessage { killProcessId :: ProcessId,
-                             killDestId :: DestId,
-                             killHeader :: Header,
-                             killPayload :: Payload }
-             | SubscribeMessage { subProcessId :: ProcessId,
-                                  subGroupId :: GroupId }
-             | UnsubscribeMessage { usubProcessId :: ProcessId,
-                                    usubGroupId :: GroupId }
-             | AssignMessage { assName :: Name,
-                               assDestId :: DestId }
-             | UnassignMessage { uassName :: Name,
-                                 uassDestId :: DestId }
-             | ShutdownMessage { shutProcessId :: ProcessId,
-                                 shutNodeId :: NodeId,
-                                 shutHeader :: Header,
-                                 shutPayload :: Payload }
-             | ConnectMessage { connNode :: Node }
-             | ConnectRemoteMessage { conrNodeId :: PartialNodeId }
-             | ListenEndMessage { lendListenedId :: DestId,
-                                  lendListenerId :: DestId }
-             | UnlistenEndMessage { ulendListenedId :: DestId,
-                                    ulendListenerId :: DestId }
-             | HelloMessage { heloNode :: Node }
-             | JoinMessage { joinNode :: Node }
+data Message = UserMessage { umsgSourceId :: !SourceId,
+                             umsgDestId :: !DestId,
+                             umsgHeader :: !Header,
+                             umsgPayload :: !Payload }
+             | SpawnMessage { spawnSourceId :: !SourceId,
+                              spawnEntry :: !Entry,
+                              spawnProcessId :: !ProcessId,
+                              spawnHeader :: !Header,
+                              spawnPayload :: !Payload }
+             | QuitMessage { quitProcessId :: !ProcessId,
+                             quitHeader :: !Header,
+                             quitPayload :: !Payload }
+             | EndMessage { endProcessId :: !ProcessId,
+                            endException :: !(Maybe SomeException) }
+             | KillMessage { killProcessId :: !ProcessId,
+                             killDestId :: !DestId,
+                             killHeader :: !Header,
+                             killPayload :: !Payload }
+             | SubscribeMessage { subProcessId :: !ProcessId,
+                                  subGroupId :: !GroupId }
+             | UnsubscribeMessage { usubProcessId :: !ProcessId,
+                                    usubGroupId :: !GroupId }
+             | AssignMessage { assName :: !Name,
+                               assDestId :: !DestId }
+             | UnassignMessage { uassName :: !Name,
+                                 uassDestId :: !DestId }
+             | ShutdownMessage { shutProcessId :: !ProcessId,
+                                 shutNodeId :: !NodeId,
+                                 shutHeader :: !Header,
+                                 shutPayload :: !Payload }
+             | ConnectMessage { connNode :: !Node }
+             | ConnectRemoteMessage { conrNodeId :: !PartialNodeId }
+             | ListenEndMessage { lendListenedId :: !DestId,
+                                  lendListenerId :: !DestId }
+             | UnlistenEndMessage { ulendListenedId :: !DestId,
+                                    ulendListenerId :: !DestId }
+             | HelloMessage { heloNode :: !Node }
+             | JoinMessage { joinNode :: !Node }
 
 -- | The message source type
 data SourceId = NoSource
               | NormalSource ProcessId
-              | CauseSource { causeSourceId :: ProcessId,
-                              causeCauseId :: ProcessId }
+              | CauseSource { causeSourceId :: !ProcessId,
+                              causeCauseId :: !ProcessId }
               deriving (Eq, Ord, Generic)
 
 -- | The message source type Binary instance
@@ -521,8 +519,8 @@ instance Show SourceId where
                          (show causeCauseId)
 
 -- | The message destination type
-data DestId = ProcessDest ProcessId
-            | GroupDest GroupId
+data DestId = ProcessDest !ProcessId
+            | GroupDest !GroupId
             deriving (Eq, Ord, Generic)
 
 -- | The message distination type Binary instance
@@ -545,46 +543,46 @@ instance Show DestId where
   show (ProcessDest pid) = printf "process:%s" $ show pid
   show (GroupDest gid) = printf "group:%s" $ show gid
 
--- | The remote event type
-data RemoteEvent = RemoteConnected { rconNodeId :: NodeId,
-                                     rconSocket :: Socket,
-                                     rconBuffer :: ByteString }
-                 | RemoteConnectFailed { rcflNodeId :: PartialNodeId }
-                 | RemoteReceived { recvNodeId :: NodeId,
-                                    recvMessage :: RemoteMessage }
-                 | RemoteDisconnected { dconNodeId :: NodeId }
-                 deriving (Eq)
+-- | The event type
+data Event = RemoteConnected { rconNodeId :: !NodeId,
+                               rconSocket :: !Socket,
+                               rconBuffer :: !ByteString }
+           | RemoteConnectFailed { rcflNodeId :: !PartialNodeId }
+           | RemoteReceived { recvNodeId :: !NodeId,
+                              recvMessage :: !RemoteMessage }
+           | RemoteDisconnected { dconNodeId :: !NodeId }
+           | LocalReceived { lrcvMessage :: !Message }
 
 -- | The remote message type
-data RemoteMessage = RemoteUserMessage { rumsgSourceId :: SourceId,
-                                         rumsgDestId :: DestId,
-                                         rumsgHeader :: Header,
-                                         rumsgPayload :: Payload }
-                   | RemoteEndMessage { rendSourceId :: SourceId,
-                                        rendHeader :: Header,
-                                        rendPayload :: Payload }
-                   | RemoteKillMessage { rkillProcessId :: ProcessId,
-                                         rkillDestId :: DestId,
-                                         rkillHeader :: Header,
-                                         rkillPayload :: Payload }
-                   | RemoteSubscribeMessage { rsubProcessId :: ProcessId,
-                                              rsubGroupId :: GroupId }
-                   | RemoteUnsubscribeMessage { rusubProcessId :: ProcessId,
-                                                rusubGroupId :: GroupId }
-                   | RemoteAssignMessage { rassName :: Name,
-                                           rassDestId :: DestId }
-                   | RemoteUnassignMessage { ruassName :: Name,
-                                             ruassDestId :: DestId }
-                   | RemoteShutdownMessage { rshutProcessId :: ProcessId,
-                                             rshutHeader :: Header,
-                                             rshutPayload :: Payload }
-                   | RemoteHelloMessage { rheloNodeId :: NodeId,
-                                          rheloKey :: Key }
-                   | RemoteListenEndMessage { rlendListenedId :: DestId,
-                                              rlendListenerId :: DestId }
-                   | RemoteUnlistenEndMessage { rulendListenedId :: DestId,
-                                                rulendListenerId :: DestId }
-                   | RemoteJoinMessage { rjoinNodeId :: NodeId }
+data RemoteMessage = RemoteUserMessage { rumsgSourceId :: !SourceId,
+                                         rumsgDestId :: !DestId,
+                                         rumsgHeader :: !Header,
+                                         rumsgPayload :: !Payload }
+                   | RemoteEndMessage { rendSourceId :: !SourceId,
+                                        rendHeader :: !Header,
+                                        rendPayload :: !Payload }
+                   | RemoteKillMessage { rkillProcessId :: !ProcessId,
+                                         rkillDestId :: !DestId,
+                                         rkillHeader :: !Header,
+                                         rkillPayload :: !Payload }
+                   | RemoteSubscribeMessage { rsubProcessId :: !ProcessId,
+                                              rsubGroupId :: !GroupId }
+                   | RemoteUnsubscribeMessage { rusubProcessId :: !ProcessId,
+                                                rusubGroupId :: !GroupId }
+                   | RemoteAssignMessage { rassName :: !Name,
+                                           rassDestId :: !DestId }
+                   | RemoteUnassignMessage { ruassName :: !Name,
+                                             ruassDestId :: !DestId }
+                   | RemoteShutdownMessage { rshutProcessId :: !ProcessId,
+                                             rshutHeader :: !Header,
+                                             rshutPayload :: !Payload }
+                   | RemoteHelloMessage { rheloNodeId :: !NodeId,
+                                          rheloKey :: !Key }
+                   | RemoteListenEndMessage { rlendListenedId :: !DestId,
+                                              rlendListenerId :: !DestId }
+                   | RemoteUnlistenEndMessage { rulendListenedId :: !DestId,
+                                                rulendListenerId :: !DestId }
+                   | RemoteJoinMessage { rjoinNodeId :: !NodeId }
                    | RemoteLeaveMessage
                    deriving (Eq, Ord, Generic)
 

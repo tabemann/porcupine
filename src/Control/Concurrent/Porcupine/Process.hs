@@ -88,7 +88,8 @@ module Control.Concurrent.Porcupine.Process
 where
 
 import Control.Concurrent.Porcupine.Private.Types
-import qualified Data.ByteString.Lazy as BS
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Binary as B
 import qualified Data.Sequence as S
 import qualified Data.Text as T
@@ -136,7 +137,8 @@ spawnInit entry node header payload = do
                        spawnProcessId = spawnedPid,
                        spawnHeader = header,
                        spawnPayload = payload } 
-  atomically $ writeTQueue (nodeQueue node) message
+  atomically . writeTQueue (nodeQueue node) $
+    LocalReceived { lrcvMessage = message }
   return spawnedPid
 
 -- | Spawn a process on the local node without a preexisting process without
@@ -207,7 +209,7 @@ quit header payload = do
 
 -- | Quit the current process with a generic quit message header and payload.
 quit' :: Process ()
-quit' = quit (B.encode ("genericQuit" :: T.Text)) BS.empty
+quit' = quit (encode ("genericQuit" :: T.Text)) BS.empty
 
 -- | Kill another process or process group.
 kill :: DestId -> Header -> Payload -> Process ()
@@ -221,7 +223,7 @@ kill did header payload = do
 -- | Kill another process or process group with a generic kill message header
 -- and payload.
 kill' :: DestId -> Process ()
-kill' did = kill did (B.encode ("genericKill" :: T.Text)) BS.empty
+kill' did = kill did (encode ("genericKill" :: T.Text)) BS.empty
 
 -- | Kill another process or process group for another process.
 killAsProxy :: DestId -> ProcessId -> Header -> Payload -> Process ()
@@ -235,7 +237,7 @@ killAsProxy did pid header payload = do
 -- kill message header and payload.
 killAsProxy' :: DestId -> ProcessId -> Process ()
 killAsProxy' did pid =
-  killAsProxy did pid (B.encode ("genericKill" :: T.Text)) BS.empty
+  killAsProxy did pid (encode ("genericKill" :: T.Text)) BS.empty
 
 -- | Shutdown a node.
 shutdown :: NodeId -> Header -> Payload -> Process ()
@@ -253,7 +255,7 @@ shutdown nid header payload = do
 
 -- | Shutdown a node with a generic shutdown message header and payload.
 shutdown' :: NodeId -> Process ()
-shutdown' nid = shutdown nid (B.encode ("genericShutdown" :: T.Text)) BS.empty
+shutdown' nid = shutdown nid (encode ("genericShutdown" :: T.Text)) BS.empty
 
 -- | Shutdown a node for another process.
 shutdownAsProxy :: NodeId -> ProcessId -> Header -> Payload -> Process ()
@@ -272,7 +274,7 @@ shutdownAsProxy nid pid header payload = do
 -- and payload.
 shutdownAsProxy' :: NodeId -> ProcessId -> Process ()
 shutdownAsProxy' nid pid =
-  shutdownAsProxy nid pid (B.encode ("genericShutdown" :: T.Text)) BS.empty
+  shutdownAsProxy nid pid (encode ("genericShutdown" :: T.Text)) BS.empty
 
 -- | Subscribe to a group.
 subscribe :: GroupId -> Process ()
@@ -435,7 +437,9 @@ connectRemote fixedNum address randomNum = do
 sendRaw :: Message -> Process ()
 sendRaw message = do
   node <- Process $ procNode <$> St.get
-  liftIO . atomically $ writeTQueue (nodeQueue node) message
+  liftIO . atomically . writeTQueue (nodeQueue node) $
+    LocalReceived { lrcvMessage = message `seq` message }
+  liftIO $ putStrLn "Put event"
 
 -- | Read messages from the queue.
 receive :: S.Seq (Handler a) -> Process a
@@ -510,3 +514,7 @@ match options message =
             Nothing -> match rest message
         EmptyL -> Nothing
     _ -> Nothing
+
+-- | Encode data to a strict ByteString
+encode :: B.Binary a => a -> BS.ByteString
+encode = BSL.toStrict . B.encode

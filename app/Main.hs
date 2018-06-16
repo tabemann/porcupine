@@ -36,19 +36,26 @@ import qualified Data.Text as T
 import Data.Text.IO (putStrLn)
 import qualified Data.Binary as B
 import qualified Data.Sequence as S
-import qualified Data.ByteString.Lazy as BS
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BSL
 import qualified Network.Socket as NS
 import qualified Data.HashMap.Lazy as M
 import Control.Monad.IO.Class (MonadIO (..))
 import Control.Monad (forM,
                       forM_,
                       replicateM,
-                      (=<<))
+                      (=<<),
+                      forever)
+import Control.Concurrent (threadDelay)
 import Data.Functor ((<$>),
                      fmap)
 import Data.Word (Word16)
 import Text.Printf (printf)
 import Prelude hiding (putStrLn)
+import System.IO (hSetBuffering,
+                  BufferMode (..),
+                  stdout,
+                  stderr)
 
 -- | A simple message receiver.
 simpleMessageReceiver :: P.Process ()
@@ -57,12 +64,12 @@ simpleMessageReceiver = do
   loop
   where loop = do
           P.receive [\sid did header payload ->
-                       if (B.decode header :: T.Text) == "messageText"
+                       if (decode header :: T.Text) == "messageText"
                        then Just . liftIO . putStrLn . T.pack $
-                            printf "Received %s" (B.decode payload :: T.Text)
+                            printf "Received %s" (decode payload :: T.Text)
                        else Nothing,
                      \sid did header payload ->
-                       if (B.decode header :: T.Text) == "normalQuit"
+                       if (decode header :: T.Text) == "normalQuit"
                        then Just $ do
                          liftIO $ putStrLn "Exiting receive process..."
                          P.quit'
@@ -77,10 +84,10 @@ simpleMessageSender0 pid = do
   liftIO $ putStrLn "Starting to send messages..."
   forM_ ([1..100] :: S.Seq Integer) $ \n -> do
     liftIO . putStrLn . T.pack $ printf "Sending %d" n
-    P.send (P.ProcessDest pid) (B.encode ("messageText" :: T.Text))
-      (B.encode . T.pack $ printf "%d" n)
+    P.send (P.ProcessDest pid) (encode ("messageText" :: T.Text))
+      (encode . T.pack $ printf "%d" n)
   liftIO $ putStrLn "Sending message requesting quit..."
-  P.send (P.ProcessDest pid) (B.encode ("normalQuit" :: T.Text)) BS.empty
+  P.send (P.ProcessDest pid) (encode ("normalQuit" :: T.Text)) BS.empty
   liftIO $ putStrLn "Waiting for termination..."
   P.receive [\sid did header payload ->
                if sid == P.NormalSource pid then Just $ return () else Nothing]
@@ -110,10 +117,10 @@ simpleMessageSender1 pid node = do
   liftIO $ putStrLn "Starting to send messages..."
   forM_ ([1..100] :: S.Seq Integer) $ \n -> do
     liftIO . putStrLn . T.pack $ printf "Sending %d" n
-    P.send (P.ProcessDest pid) (B.encode ("messageText" :: T.Text))
-      (B.encode . T.pack $ printf "%d" n)
+    P.send (P.ProcessDest pid) (encode ("messageText" :: T.Text))
+      (encode . T.pack $ printf "%d" n)
   liftIO $ putStrLn "Sending message requesting quit..."
-  P.send (P.ProcessDest pid) (B.encode ("normalQuit" :: T.Text)) BS.empty
+  P.send (P.ProcessDest pid) (encode ("normalQuit" :: T.Text)) BS.empty
   liftIO $ putStrLn "Waiting for termination..."
   P.receive [\sid did header payload ->
                if sid == P.NormalSource pid then Just $ return () else Nothing]
@@ -153,10 +160,10 @@ simpleMessageSender2 pid0 pid1 node = do
   liftIO $ putStrLn "Starting to send messages..."
   forM_ ([1..100] :: S.Seq Integer) $ \n -> do
     liftIO . putStrLn . T.pack $ printf "Sending %d" n
-    P.send (P.GroupDest gid) (B.encode ("messageText" :: T.Text))
-      (B.encode . T.pack $ printf "%d" n)
+    P.send (P.GroupDest gid) (encode ("messageText" :: T.Text))
+      (encode . T.pack $ printf "%d" n)
   liftIO $ putStrLn "Sending message requesting quit..."
-  P.send (P.GroupDest gid) (B.encode ("normalQuit" :: T.Text)) BS.empty
+  P.send (P.GroupDest gid) (encode ("normalQuit" :: T.Text)) BS.empty
   liftIO $ putStrLn "Waiting for termination..."
   P.receive [\sid did header payload ->
                if sid == P.NormalSource pid0 then Just $ return () else Nothing]
@@ -191,13 +198,13 @@ simpleMessageReceiver3 index shutdownOnQuit = do
   loop
   where loop = do
           P.receive [\sid did header payload ->
-                       if (B.decode header :: T.Text) == "messageText"
+                       if (decode header :: T.Text) == "messageText"
                        then do
                          Just . liftIO $ printf "Received %s for %d\n"
-                           (B.decode payload :: T.Text) index
+                           (decode payload :: T.Text) index
                        else Nothing,
                      \sid did header payload ->
-                       if (B.decode header :: T.Text) == "normalQuit"
+                       if (decode header :: T.Text) == "normalQuit"
                        then Just $ do
                          liftIO $ putStrLn "Exiting receive process..."
                          if shutdownOnQuit
@@ -223,15 +230,15 @@ simpleMessageSender3 pid0 pid1 address = do
   liftIO $ putStrLn "Starting to send messages..."
   forM_ ([1..100] :: S.Seq Integer) $ \n -> do
     liftIO . putStrLn . T.pack $ printf "Sending %d" n
-    P.send (P.GroupDest gid) (B.encode ("messageText" :: T.Text))
-      (B.encode . T.pack $ printf "%d" n)
+    P.send (P.GroupDest gid) (encode ("messageText" :: T.Text))
+      (encode . T.pack $ printf "%d" n)
   liftIO $ putStrLn "Sending message requesting quit..."
-  P.send (P.GroupDest gid) (B.encode ("normalQuit" :: T.Text)) BS.empty
+  P.send (P.GroupDest gid) (encode ("normalQuit" :: T.Text)) BS.empty
   liftIO $ putStrLn "Waiting for termination..."
   replicateM 2 $ do
     P.receive [\sid did header payload ->
-                 if header == B.encode ("remoteDisconnected" :: T.Text) ||
-                    header == B.encode ("genericQuit" :: T.Text)
+                 if header == encode ("remoteDisconnected" :: T.Text) ||
+                    header == encode ("genericQuit" :: T.Text)
                  then Just . liftIO $ putStrLn "Received end"
                  else Nothing]
   liftIO $ putStrLn "Shutting down..."
@@ -265,6 +272,90 @@ simpleMessagingTest3 = do
         Nothing -> putStrLn "Did not find address 1"
     Nothing -> putStrLn "Did not find address 0"
 
+-- | The ring repeater process.
+ringRepeater :: Int -> P.Process ()
+ringRepeater count = do
+  liftIO $ putStrLn "Getting process Id..."
+  pid <- P.receive [\_ _ header payload ->
+                      if header == encode ("otherProcess" :: T.Text)
+                      then Just $ return $ (decode payload :: P.ProcessId)
+                      else Nothing]
+  liftIO $ putStrLn "Starting to receive messages..."
+  loop pid count
+  where loop pid count = do
+          P.receive [\_ _ header payload ->
+                        if header == encode ("textMessage" :: T.Text)
+                        then Just $ do
+                          liftIO $ printf "Got text: %s\n"
+                            (decode payload :: T.Text)
+                          P.send (P.ProcessDest pid) header payload
+                        else Nothing]
+          if count > 1
+            then loop pid $ count - 1
+            else do nid <- P.myNodeId
+                    P.shutdown' nid
+                    P.quit'
+
+-- | The ring sender process.
+ringSender :: NS.SockAddr -> P.ProcessId -> Int -> P.Process ()
+ringSender address pid count = do
+  liftIO $ putStrLn "Connecting to node 0..."
+  P.connectRemote 0 address Nothing
+  liftIO . printf "Listening for process %s termination...\n" $ show pid
+  P.listenEnd $ P.ProcessDest pid
+  myPid <- P.myProcessId
+  let header = encode ("otherProcess" :: T.Text)
+      payload = encode myPid
+  P.send (P.ProcessDest pid) header payload
+  forM ([0..count - 1] :: [Int]) $ \i -> do
+    let header = encode ("textMessage" :: T.Text)
+        payload = encode . T.pack $ printf "%d" i
+    P.send (P.ProcessDest pid) header payload
+    liftIO $ printf "Sent: %d\n" i
+  loop
+  where loop = do
+          P.receive [\_ _ header payload ->
+                        if header == encode ("textMessage" :: T.Text)
+                        then Just $ do
+                          liftIO $ printf "Got text back: %s\n"
+                            (decode payload :: T.Text)
+                        else if header ==
+                                encode ("remoteDisconnected" :: T.Text) ||
+                                header == encode ("genericQuit" :: T.Text)
+                        then Just $ do
+                          liftIO $ putStrLn "Received end"
+                          nid <- P.myNodeId
+                          P.shutdown' nid
+                          P.quit'
+                        else Just $ do
+                          liftIO $ printf "Got message: %s\n"
+                            (decode header :: T.Text)]
+          loop
+
+-- | A ring messaging test.
+ringMessagingTest0 :: IO ()
+ringMessagingTest0 = do
+  putStrLn "Getting address 0..."
+  address0 <- getSockAddr 6660
+  case address0 of
+    Just address0 -> do
+      putStrLn "Getting address 1..."
+      address1 <- getSockAddr 6661
+      case address1 of
+        Just address1 -> do
+          putStrLn "Starting node 0..."
+          node0 <- PN.start 0 (Just address0) BS.empty
+          putStrLn "Starting node 1..."
+          node1 <- PN.start 1 (Just address1) BS.empty
+          repeaterPid <- P.spawnInit' (ringRepeater 50) node0
+          P.spawnInit' (ringSender address0 repeaterPid 100) node1
+          PN.waitShutdown node0
+          putStrLn "Node 0 has shut down"
+          PN.waitShutdown node1
+          putStrLn "Node 1 has shut down"
+        Nothing -> putStrLn "Did not find address 1"
+    Nothing -> putStrLn "Did not find address 0"
+
 -- | Get socket address for localhost and port.
 getSockAddr :: Word16 -> IO (Maybe NS.SockAddr)
 getSockAddr port = do
@@ -282,4 +373,13 @@ main = do
   --simpleMessagingTest0
   --simpleMessagingTest1
   --simpleMessagingTest2
-  simpleMessagingTest3
+  --simpleMessagingTest3
+  ringMessagingTest0
+
+-- | Decode data from a strict ByteString.
+decode :: B.Binary a => BS.ByteString -> a
+decode = B.decode . BSL.fromStrict
+
+-- | Encode data to a strict ByteString
+encode :: B.Binary a => a -> BS.ByteString
+encode = BSL.toStrict . B.encode

@@ -160,7 +160,6 @@ runNode = do
     (Left <$> readTMVar shutdown) `orElse` (Right <$> readTQueue queue)
   case event of
     Right event -> do
-      liftIO $ putStrLn "Got event"
       state <- St.get
       state' <- do
         liftIO $ catch (do (_, state') <- St.runStateT (handleEvent event) state
@@ -981,6 +980,19 @@ updateRemoteNode f nid =
                 state { nodeRemoteNodes =
                           M.adjust f nid $ nodeRemoteNodes state }
 
+-- | Update a pending remote node.
+updatePendingRemoteNode :: (PendingRemoteNodeState -> PendingRemoteNodeState) ->
+                           PartialNodeId -> NodeM ()
+updatePendingRemoteNode f pnid =
+  St.modify $
+  \state ->
+    state { nodePendingRemoteNodes =
+              case S.findIndexL (\pnode -> matchPartialNodeId' (prnodeId pnode)
+                                           pnid) $
+                   nodePendingRemoteNodes state of
+                Just index -> S.adjust' f index $ nodePendingRemoteNodes state
+                Nothing -> nodePendingRemoteNodes state }
+
 -- | Add a group.
 addGroup :: GroupId -> GroupState -> NodeM ()
 addGroup gid group = do
@@ -1006,18 +1018,36 @@ registerLocalProcessEndListener pid listenerId = do
 -- | Register remote node end listener.
 registerRemoteNodeEndListener :: NodeId -> DestId -> NodeM ()
 registerRemoteNodeEndListener nid listenerId = do
-  updateRemoteNode
-    (\rnode ->
-        case S.findIndexL (\(did, _) -> listenerId == did) $
-             rnodeEndListeners rnode of
-          Just index ->
-            rnode { rnodeEndListeners =
-                      S.adjust' (\(did, count) -> (did, count + 1))
-                      index $ rnodeEndListeners rnode }
-          Nothing ->
-            rnode { rnodeEndListeners = rnodeEndListeners rnode |>
-                                        (listenerId, 1) })
-    nid
+  liftIO $ printf "Adding remote end listener on %s for %s\n"
+    (show nid) (show listenerId)
+  remoteNodes <- nodeRemoteNodes <$> St.get
+  case M.lookup nid remoteNodes of
+    Just _ ->
+      updateRemoteNode
+      (\rnode ->
+         case S.findIndexL (\(did, _) -> listenerId == did) $
+              rnodeEndListeners rnode of
+           Just index ->
+             rnode { rnodeEndListeners =
+                       S.adjust' (\(did, count) -> (did, count + 1))
+                       index $ rnodeEndListeners rnode }
+           Nothing ->
+             rnode { rnodeEndListeners = rnodeEndListeners rnode |>
+                                         (listenerId, 1) })
+      nid
+    Nothing ->
+      updatePendingRemoteNode
+      (\pnode ->
+         case S.findIndexL (\(did, _) -> listenerId == did) $
+              prnodeEndListeners pnode of
+           Just index ->
+             pnode { prnodeEndListeners =
+                       S.adjust' (\(did, count) -> (did, count + 1))
+                       index $ prnodeEndListeners pnode }
+           Nothing ->
+             pnode { prnodeEndListeners = prnodeEndListeners pnode |>
+                                          (listenerId, 1) })
+      (partialNodeIdOfNodeId nid)
 
 -- | Register group Id end listener.
 registerGroupEndListener :: GroupId -> DestId -> NodeM ()

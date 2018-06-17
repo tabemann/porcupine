@@ -439,7 +439,6 @@ sendRaw message = do
   node <- Process $ procNode <$> St.get
   liftIO . atomically . writeTQueue (nodeQueue node) $
     LocalReceived { lrcvMessage = message `seq` message }
-  liftIO $ putStrLn "Put event"
 
 -- | Read messages from the queue.
 receive :: S.Seq (Handler a) -> Process a

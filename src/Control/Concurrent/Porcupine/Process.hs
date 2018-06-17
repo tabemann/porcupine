@@ -50,6 +50,10 @@ module Control.Concurrent.Porcupine.Process
    UserRemoteDisconnected (..),
    myProcessId,
    myNodeId,
+   nodeIdOfProcessId,
+   nodeIdOfSourceId,
+   nodeIdOfDestId,
+   processIdOfSourceId,
    spawnInit,
    spawnInit',
    spawn,
@@ -76,6 +80,7 @@ module Control.Concurrent.Porcupine.Process
    unsubscribeAsProxy,
    assign,
    unassign,
+   tryLookup,
    lookup,
    newGroupId,
    connect,
@@ -371,9 +376,9 @@ unassign name did = do
           Nothing -> names'
       Nothing -> names'
 
--- | Look up a process or group by name.
-lookup :: Name -> Process (Maybe DestId)
-lookup name = do
+-- | Try to look up a process or group by name.
+tryLookup :: Name -> Process (Maybe DestId)
+tryLookup name = do
   processInfo <- Process St.get
   names <- liftIO . atomically . readTVar . nodeNames $ procNode processInfo
   case M.lookup name names of
@@ -382,6 +387,19 @@ lookup name = do
         (did, _) :< _ -> return $ Just did
         EmptyL -> return Nothing
     Nothing -> return Nothing
+
+-- | Do a blocking lookup of a process or group by name.
+lookup :: Name -> Process DestId
+lookup name = do
+  processInfo <- Process St.get
+  liftIO . atomically $ do
+    names <- readTVar .  nodeNames $ procNode processInfo
+    case M.lookup name names of
+      Just entries ->
+        case S.viewl entries of
+          (did, _) :< _ -> return did
+          EmptyL -> retry
+      Nothing -> retry
 
 -- | Generate a new group Id.
 newGroupId :: Process GroupId

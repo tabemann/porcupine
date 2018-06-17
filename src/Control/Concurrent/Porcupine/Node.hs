@@ -153,7 +153,6 @@ getNodeId = nodeId
 -- | Run a node.
 runNode :: NodeM ()
 runNode = do
-  liftIO $ putStrLn "Getting event"
   queue <- nodeQueue . nodeInfo <$> St.get
   shutdown <- nodeShutdown . nodeInfo <$> St.get
   event <- liftIO . atomically $ do
@@ -784,7 +783,6 @@ handleIncomingUserMessage destId sourceId header payload = do
                                   umsgHeader = header,
                                   umsgPayload = payload }
               Nothing -> return ()
-  liftIO $ putStrLn "Finished handleIncomingUserMessage"
 
 -- | Send a locall message.
 sendLocalMessage :: Node -> Message -> NodeM ()

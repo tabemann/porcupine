@@ -132,6 +132,27 @@ myProcessId = Process $ procId <$> St.get
 myNodeId :: Process NodeId
 myNodeId = Process $ nodeId . procNode <$> St.get
 
+-- | Get node Id of process Id
+nodeIdOfProcessId :: ProcessId -> NodeId
+nodeIdOfProcessId = pidNodeId
+
+-- | Get node Id of destination Id
+nodeIdOfDestId :: DestId -> Maybe NodeId
+nodeIdOfDestId (ProcessDest pid) = Just $ pidNodeId pid
+nodeIdOfDestId (GroupDest _) = Nothing
+
+-- | Get node Id of source Id
+nodeIdOfSourceId :: SourceId -> Maybe NodeId
+nodeIdOfSourceId NoSource = Nothing
+nodeIdOfSourceId (NormalSource pid) = Just $ pidNodeId pid
+nodeIdOfSourceId CauseSource{..} = Just $ pidNodeId causeSourceId
+
+-- | Process id of source id
+processIdOfSourceId :: SourceId -> Maybe ProcessId
+processIdOfSourceId NoSource = Nothing
+processIdOfSourceId (NormalSource pid) = Just pid
+processIdOfSourceId CauseSource{..} = Just causeSourceId
+
 -- | Spawn a process on the local node without a preexisting process.
 spawnInit :: Entry -> Node -> Header -> Payload -> IO ProcessId
 spawnInit entry node header payload = do

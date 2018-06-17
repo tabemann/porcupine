@@ -62,11 +62,7 @@ module Control.Concurrent.Porcupine.Private.Types
    Event (..),
    RemoteMessage (..),
    UserRemoteConnectFailed (..),
-   UserRemoteDisconnected (..),
-   nodeIdOfProcessId,
-   nodeIdOfSourceId,
-   nodeIdOfDestId,
-   processIdOfSourceId)
+   UserRemoteDisconnected (..))
 
 where
 
@@ -197,10 +193,6 @@ data ProcessId =
               pidRandomNum :: !Integer,
               pidNodeId :: !NodeId }
   deriving (Eq, Ord, Generic)
-
--- | Get node Id of process Id
-nodeIdOfProcessId :: ProcessId -> NodeId
-nodeIdOfProcessId = pidNodeId
 
 -- | THe process Id Show instance
 instance Show ProcessId where
@@ -498,18 +490,6 @@ data SourceId = NoSource
                               causeCauseId :: !ProcessId }
               deriving (Eq, Ord, Generic)
 
--- | Get node Id of source Id
-nodeIdOfSourceId :: SourceId -> Maybe NodeId
-nodeIdOfSourceId NoSource = Nothing
-nodeIdOfSourceId (NormalSource pid) = Just $ pidNodeId pid
-nodeIdOfSourceId CauseSource{..} = Just $ pidNodeId causeSourceId
-
--- | Process id of source id
-processIdOfSourceId :: SourceId -> Maybe ProcessId
-processIdOfSourceId NoSource = Nothing
-processIdOfSourceId (NormalSource pid) = Just pid
-processIdOfSourceId CauseSource{..} = Just causeSourceId
-
 -- | The message source type Binary instance
 instance Binary SourceId where
   put NoSource = put (0 :: Word8)
@@ -542,11 +522,6 @@ instance Show SourceId where
 data DestId = ProcessDest !ProcessId
             | GroupDest !GroupId
             deriving (Eq, Ord, Generic)
-
--- | Get node Id of destination Id
-nodeIdOfDestId :: DestId -> Maybe NodeId
-nodeIdOfDestId (ProcessDest pid) = Just $ pidNodeId pid
-nodeIdOfDestId (GroupDest _) = Nothing
 
 -- | The message distination type Binary instance
 instance Binary DestId where

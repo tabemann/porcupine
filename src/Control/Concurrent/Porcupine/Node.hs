@@ -88,6 +88,7 @@ import Control.Exception.Base (SomeException,
 import Control.Monad (forM,
                       forM_,
                       replicateM,
+                      when,
                       (=<<))
 import Data.Functor ((<$>),
                      fmap)
@@ -100,6 +101,14 @@ import Debug.Trace (trace)
 -- | The magic value
 magicValue :: Word32
 magicValue = 0x904C0914
+
+-- | Do log or not
+logActive :: Bool
+logActive = False
+
+-- | Log a message.
+logMessage :: MonadIO a => String -> a ()
+logMessage string = when logActive . liftIO $ putStr string
 
 -- | Start a node with a given fixed index, optional address, and optional key.
 start :: Integer -> Maybe NS.SockAddr -> Key -> IO Node
@@ -168,72 +177,72 @@ runNode = do
       St.modify $ \_ -> state'
       runNode
     Left () ->
-      liftIO $ putStrLn "Actually shutting down"
+      logMessage "Actually shutting down\n"
 
 -- | Handle a local message.
 handleLocalMessage :: Message -> NodeM ()
 handleLocalMessage UserMessage{..} = do
-  liftIO $ printf "GOT UserMessage\n"
+  logMessage $ printf "GOT UserMessage\n"
   handleLocalUserMessage umsgSourceId umsgDestId umsgHeader umsgPayload
 handleLocalMessage SpawnMessage{..} = do
-  liftIO $ printf "GOT SpawnMessage\n"
+  logMessage $ printf "GOT SpawnMessage\n"
   handleLocalSpawnMessage spawnSourceId spawnEntry spawnProcessId spawnHeader
     spawnPayload
 handleLocalMessage QuitMessage{..} = do
-  liftIO $ printf "GOT QuitMessage FROM %s\n" $ show quitProcessId
+  logMessage $ printf "GOT QuitMessage FROM %s\n" $ show quitProcessId
   handleLocalQuitMessage quitProcessId quitHeader quitPayload
 handleLocalMessage EndMessage{..} = do
-  liftIO $ printf "GOT EndMessage\n"
+  logMessage $ printf "GOT EndMessage\n"
   handleLocalEndMessage endProcessId endException
 handleLocalMessage KillMessage{..} = do
-  liftIO $ printf "GOT KillMessage\n"
+  logMessage $ printf "GOT KillMessage\n"
   handleLocalKillMessage killProcessId killDestId killHeader killPayload
 handleLocalMessage SubscribeMessage{..} = do
-  liftIO $ printf "GOT SubscribeMessage\n"
+  logMessage $ printf "GOT SubscribeMessage\n"
   handleLocalSubscribeMessage subProcessId subGroupId
 handleLocalMessage UnsubscribeMessage{..} = do
-  liftIO $ printf "GOT UnsubscribeMessage\n"
+  logMessage $ printf "GOT UnsubscribeMessage\n"
   handleLocalUnsubscribeMessage usubProcessId usubGroupId
 handleLocalMessage AssignMessage{..} = do
-  liftIO $ printf "GOT AssignMessage\n"
+  logMessage $ printf "GOT AssignMessage\n"
   handleLocalAssignMessage assName assDestId
 handleLocalMessage UnassignMessage{..} = do
-  liftIO $ printf "GOT UnassignMessage\n"
+  logMessage $ printf "GOT UnassignMessage\n"
   handleLocalUnassignMessage uassName uassDestId
 handleLocalMessage ShutdownMessage{..} = do
-  liftIO $ printf "GOT ShutdownMessage FROM %s\n" $ show shutProcessId
+  logMessage $ printf "GOT ShutdownMessage FROM %s\n" $ show shutProcessId
   handleLocalShutdownMessage shutProcessId shutNodeId shutHeader shutPayload
 handleLocalMessage ConnectMessage{..} = do
-  liftIO $ printf "GOT ConnectMessage\n"
+  logMessage $ printf "GOT ConnectMessage\n"
   handleLocalConnectMessage connNode
 handleLocalMessage ConnectRemoteMessage{..} = do
-  liftIO $ printf "GOT ConnectRemoteMessage\n"
+  logMessage $ printf "GOT ConnectRemoteMessage\n"
   handleLocalConnectRemoteMessage conrNodeId
 handleLocalMessage ListenEndMessage{..} = do
-  liftIO $ printf "GOT ListenEndMessage\n"
+  logMessage $ printf "GOT ListenEndMessage\n"
   handleLocalListenEndMessage lendListenedId lendListenerId
 handleLocalMessage UnlistenEndMessage{..} = do
-  liftIO $ printf "GOT UnlistenEndMessage\n"
+  logMessage $ printf "GOT UnlistenEndMessage\n"
   handleLocalUnlistenEndMessage ulendListenedId ulendListenerId
 handleLocalMessage HelloMessage{..} = do
-  liftIO $ printf "GOT HelloMessage\n"
+  logMessage $ printf "GOT HelloMessage\n"
   handleLocalHelloMessage heloNode
 handleLocalMessage JoinMessage{..} = do
-  liftIO $ printf "GOT JoinMessage\n"
+  logMessage $ printf "GOT JoinMessage\n"
   handleLocalJoinMessage joinNode
 
 -- | Handle a remote event.
 handleEvent :: Event -> NodeM ()
 handleEvent RemoteConnected{..} = do
-  liftIO . printf "GOT RemoteConnected FROM %s\n" $ show rconNodeId
+  logMessage . printf "GOT RemoteConnected FROM %s\n" $ show rconNodeId
   handleRemoteConnected rconNodeId rconSocket rconBuffer
 handleEvent RemoteConnectFailed{..} = do
-  liftIO . printf "GOT RemoteConnectFailed FROM %s\n" $ show rcflNodeId
+  logMessage . printf "GOT RemoteConnectFailed FROM %s\n" $ show rcflNodeId
   handleRemoteConnectFailed rcflNodeId
 handleEvent RemoteReceived{..} =  
   handleRemoteMessage recvNodeId recvMessage
 handleEvent RemoteDisconnected{..} = do
-  liftIO . printf "GOT RemoteDisconnected FROM %s\n" $ show dconNodeId
+  logMessage . printf "GOT RemoteDisconnected FROM %s\n" $ show dconNodeId
   handleRemoteDisconnected dconNodeId
 handleEvent LocalReceived{..} = do
   handleLocalMessage lrcvMessage
@@ -241,46 +250,46 @@ handleEvent LocalReceived{..} = do
 -- | Handle a remote message.
 handleRemoteMessage :: NodeId -> RemoteMessage -> NodeM ()
 handleRemoteMessage nodeId RemoteUserMessage{..} = do
-  liftIO $ printf "GOT RemoteUserMessage FROM %s WITH %s\n" (show nodeId)
+  logMessage $ printf "GOT RemoteUserMessage FROM %s WITH %s\n" (show nodeId)
     (decode rumsgHeader :: T.Text)
   handleRemoteUserMessage nodeId rumsgSourceId rumsgDestId rumsgHeader
     rumsgPayload
 handleRemoteMessage nodeId RemoteEndMessage{..} = do
-  liftIO . printf "GOT RemoteEndMessage FROM %s" $ show nodeId
+  logMessage . printf "GOT RemoteEndMessage FROM %s" $ show nodeId
   handleRemoteEndMessage nodeId rendSourceId rendHeader rendPayload
 handleRemoteMessage nodeId RemoteKillMessage{..} = do
-  liftIO . printf "GOT RemoteKillMessage FROM %s" $ show nodeId
+  logMessage . printf "GOT RemoteKillMessage FROM %s" $ show nodeId
   handleRemoteKillMessage nodeId rkillProcessId rkillDestId rkillHeader
     rkillPayload
 handleRemoteMessage nodeId RemoteSubscribeMessage{..} = do
-  liftIO . printf "GOT RemoteSubscribeMessage FROM %s" $ show nodeId
+  logMessage . printf "GOT RemoteSubscribeMessage FROM %s" $ show nodeId
   handleRemoteSubscribeMessage nodeId rsubProcessId rsubGroupId
 handleRemoteMessage nodeId RemoteUnsubscribeMessage{..} = do
-  liftIO . printf "GOT RemoteUnsubscribeMessage FROM %s" $ show nodeId
+  logMessage . printf "GOT RemoteUnsubscribeMessage FROM %s" $ show nodeId
   handleRemoteUnsubscribeMessage nodeId rusubProcessId rusubGroupId
 handleRemoteMessage nodeId RemoteAssignMessage{..} = do
-  liftIO . printf "GOT RemoteAssignMessage FROM %s" $ show nodeId
+  logMessage . printf "GOT RemoteAssignMessage FROM %s" $ show nodeId
   handleRemoteAssignMessage nodeId rassName rassDestId
 handleRemoteMessage nodeId RemoteUnassignMessage{..} = do
-  liftIO . printf "GOT RemoteUnassignMessage FROM %s" $ show nodeId
+  logMessage . printf "GOT RemoteUnassignMessage FROM %s" $ show nodeId
   handleRemoteUnassignMessage nodeId ruassName ruassDestId
 handleRemoteMessage nodeId RemoteShutdownMessage{..} = do
-  liftIO . printf "GOT RemoteShutdownMessage FROM %s" $ show nodeId
+  logMessage . printf "GOT RemoteShutdownMessage FROM %s" $ show nodeId
   handleRemoteShutdownMessage nodeId rshutProcessId rshutHeader rshutPayload
 handleRemoteMessage nodeId RemoteHelloMessage{..} = do
-  liftIO . printf "GOT RemoteHelloMessage FROM %s" $ show nodeId
+  logMessage . printf "GOT RemoteHelloMessage FROM %s" $ show nodeId
   handleRemoteHelloMessage nodeId rheloNodeId rheloKey
 handleRemoteMessage nodeId RemoteListenEndMessage{..} = do
-  liftIO . printf "GOT RemoteListenEndMessage FROM %s" $ show nodeId
+  logMessage . printf "GOT RemoteListenEndMessage FROM %s" $ show nodeId
   handleRemoteListenEndMessage nodeId rlendListenedId rlendListenerId
 handleRemoteMessage nodeId RemoteUnlistenEndMessage{..} = do
-  liftIO . printf "GOT RemoteUnlistenEndMessage FROM %s" $ show nodeId
+  logMessage . printf "GOT RemoteUnlistenEndMessage FROM %s" $ show nodeId
   handleRemoteUnlistenEndMessage nodeId rulendListenedId rulendListenerId
 handleRemoteMessage nodeId RemoteJoinMessage{..} = do
-  liftIO . printf "GOT RemoteJoinMessage FROM %s" $ show nodeId
+  logMessage . printf "GOT RemoteJoinMessage FROM %s" $ show nodeId
   handleRemoteJoinMessage nodeId rjoinNodeId
 handleRemoteMessage nodeId RemoteLeaveMessage = do
-  liftIO . printf "GOT RemoteLeaveMessage FROM %s" $ show nodeId
+  logMessage . printf "GOT RemoteLeaveMessage FROM %s" $ show nodeId
   handleRemoteLeaveMessage nodeId
 
 -- | Handle a remote connected event.
@@ -344,9 +353,9 @@ handleRemoteDisconnected nid = do
       payload = encode $ UserRemoteDisconnected  { urdcNodeId = nid }
   case M.lookup nid rnodes of
     Just rnode -> do
-      liftIO $ printf "Found remote node for end\n"
+      logMessage $ printf "Found remote node for end\n"
       forM_ (rnodeEndListeners rnode) $ \(did, _) -> do
-        liftIO . printf "Sending end message to %s\n" $ show did
+        logMessage . printf "Sending end message to %s\n" $ show did
         sendLocalUserMessage did NoSource header payload
       St.modify $ \state ->
         state { nodeRemoteNodes = M.delete nid $ nodeRemoteNodes state }
@@ -675,7 +684,7 @@ handleRemoteShutdownMessage :: NodeId -> ProcessId -> Header -> Payload ->
 handleRemoteShutdownMessage nid pid header payload = do
   shutdownLocalNode pid header payload
   nid' <- nodeId . nodeInfo <$> St.get
-  liftIO . printf "SHUTTING DOWN %s\n" $ show nid'
+  logMessage . printf "SHUTTING DOWN %s\n" $ show nid'
 
 -- | Handle a remote hello message.
 handleRemoteHelloMessage :: NodeId -> NodeId -> Key -> NodeM ()
@@ -1016,7 +1025,7 @@ registerLocalProcessEndListener pid listenerId = do
 -- | Register remote node end listener.
 registerRemoteNodeEndListener :: NodeId -> DestId -> NodeM ()
 registerRemoteNodeEndListener nid listenerId = do
-  liftIO $ printf "Adding remote end listener on %s for %s\n"
+  logMessage $ printf "Adding remote end listener on %s for %s\n"
     (show nid) (show listenerId)
   remoteNodes <- nodeRemoteNodes <$> St.get
   case M.lookup nid remoteNodes of
@@ -1129,24 +1138,24 @@ unregisterGroupEndListener gid listenerId = do
 -- | Shutdown the local node.
 shutdownLocalNode :: ProcessId -> Header -> Payload -> NodeM ()
 shutdownLocalNode pid header payload = do
-  liftIO $ putStrLn "Killing local processes..."
+  logMessage "Killing local processes...\n"
   processes <- nodeProcesses <$> St.get
   forM_ processes $ \process ->
     killLocalProcess pid (procId $ pstateInfo process) header payload
   terminate <- nodeTerminate <$> St.get
-  liftIO $ putStrLn "Broadcasting leave message..."
+  logMessage "Broadcasting leave message...\n"
   broadcastRemoteMessage RemoteLeaveMessage
-  liftIO $ putStrLn "Setting terminate..."
+  logMessage "Setting terminate...\n"
   liftIO . atomically $ (tryPutTMVar terminate () >> return ())
-  liftIO $ putStrLn "Deleting list of remote nodes..."
+  logMessage "Deleting list of remote nodes...\n"
   St.modify $ \state -> state { nodeRemoteNodes = M.empty }
   nid <- nodeId . nodeInfo <$> St.get
   case nidAddress nid of
     Just _ -> do
-      liftIO $ putStrLn "Waiting for listen shutdown..."
+      logMessage "Waiting for listen shutdown...\n"
       liftIO . atomically . readTMVar . nodeListenShutdown =<< St.get
     Nothing -> return ()
-  liftIO $ putStrLn "Setting node shutdown..."
+  logMessage "Setting node shutdown...\n"
   liftIO . atomically . (flip putTMVar) () . nodeShutdown . nodeInfo =<< St.get
 
 -- | Handle subscribing to a group.
@@ -1336,7 +1345,7 @@ runSocketInput nid input terminate finalize socket buffer = do
     writeTQueue input $ RemoteDisconnected { dconNodeId = nid }
     tryPutTMVar terminate () >> return ()
     tryPutTMVar finalize () >> return ()
-  printf "DISCONNECTED FROM %s\n" $ show nid
+  logMessage . printf "DISCONNECTED FROM %s\n" $ show nid
 
 -- | Actually run socket input
 runSocketInput' :: NodeId -> TQueue Event -> NS.Socket ->

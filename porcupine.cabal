@@ -49,11 +49,161 @@ library
                 unordered-containers
   default-language: Haskell2010
 
-executable porcupine-simple-test
+executable porcupine-test-simple0
   main-is: Main.hs
   other-modules:
   hs-source-dirs:
-                 test/simple
+                 test/simple0
+  ghc-options: -threaded -O2 -rtsopts -with-rtsopts=-N
+  other-extensions:
+                   OverloadedStrings,
+                   OverloadedLists,
+                   RecordWildCards,
+                   DeriveGeneric,
+                   MultiParamTypeClasses,
+                   GeneralizedNewtypeDeriving
+  build-depends:
+                base >=4.7 && <5,
+                porcupine,
+                stm,
+                async,
+                bytestring,
+                text,
+                utf8-string,
+                network,
+                containers >=0.5.8,
+                hashable,
+                binary,
+                transformers,
+                random,
+                unordered-containers
+  default-language: Haskell2010
+
+executable porcupine-test-simple1
+  main-is: Main.hs
+  other-modules:
+  hs-source-dirs:
+                 test/simple1
+  ghc-options: -threaded -O2 -rtsopts -with-rtsopts=-N
+  other-extensions:
+                   OverloadedStrings,
+                   OverloadedLists,
+                   RecordWildCards,
+                   DeriveGeneric,
+                   MultiParamTypeClasses,
+                   GeneralizedNewtypeDeriving
+  build-depends:
+                base >=4.7 && <5,
+                porcupine,
+                stm,
+                async,
+                bytestring,
+                text,
+                utf8-string,
+                network,
+                containers >=0.5.8,
+                hashable,
+                binary,
+                transformers,
+                random,
+                unordered-containers
+  default-language: Haskell2010
+
+executable porcupine-test-simple2
+  main-is: Main.hs
+  other-modules:
+  hs-source-dirs:
+                 test/simple2
+  ghc-options: -threaded -O2 -rtsopts -with-rtsopts=-N
+  other-extensions:
+                   OverloadedStrings,
+                   OverloadedLists,
+                   RecordWildCards,
+                   DeriveGeneric,
+                   MultiParamTypeClasses,
+                   GeneralizedNewtypeDeriving
+  build-depends:
+                base >=4.7 && <5,
+                porcupine,
+                stm,
+                async,
+                bytestring,
+                text,
+                utf8-string,
+                network,
+                containers >=0.5.8,
+                hashable,
+                binary,
+                transformers,
+                random,
+                unordered-containers
+  default-language: Haskell2010
+
+executable porcupine-test-simple3
+  main-is: Main.hs
+  other-modules:
+  hs-source-dirs:
+                 test/simple3
+  ghc-options: -threaded -O2 -rtsopts -with-rtsopts=-N
+  other-extensions:
+                   OverloadedStrings,
+                   OverloadedLists,
+                   RecordWildCards,
+                   DeriveGeneric,
+                   MultiParamTypeClasses,
+                   GeneralizedNewtypeDeriving
+  build-depends:
+                base >=4.7 && <5,
+                porcupine,
+                stm,
+                async,
+                bytestring,
+                text,
+                utf8-string,
+                network,
+                containers >=0.5.8,
+                hashable,
+                binary,
+                transformers,
+                random,
+                unordered-containers
+  default-language: Haskell2010
+
+executable porcupine-test-ring0
+  main-is: Main.hs
+  other-modules:
+  hs-source-dirs:
+                 test/ring0
+  ghc-options: -threaded -O2 -rtsopts -with-rtsopts=-N
+  other-extensions:
+                   OverloadedStrings,
+                   OverloadedLists,
+                   RecordWildCards,
+                   DeriveGeneric,
+                   MultiParamTypeClasses,
+                   GeneralizedNewtypeDeriving
+  build-depends:
+                base >=4.7 && <5,
+                porcupine,
+                stm,
+                async,
+                bytestring,
+                text,
+                utf8-string,
+                network,
+                containers >=0.5.8,
+                hashable,
+                binary,
+                transformers,
+                random,
+                unordered-containers
+  default-language: Haskell2010
+
+executable porcupine-test-ring1
+  main-is: Main.hs
+  other-modules:
+  hs-source-dirs:
+                 test/ring1
   ghc-options: -threaded -O2 -rtsopts -with-rtsopts=-N
   other-extensions:
                    OverloadedStrings,

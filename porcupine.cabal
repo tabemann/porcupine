@@ -21,7 +21,8 @@ source-repository head
 library
   exposed-modules:
                   Control.Concurrent.Porcupine.Node,
-                  Control.Concurrent.Porcupine.Process
+                  Control.Concurrent.Porcupine.Process,
+                  Control.Concurrent.Porcupine.GenericServer
   other-modules:
                  Control.Concurrent.Porcupine.Private.Types
   hs-source-dirs:

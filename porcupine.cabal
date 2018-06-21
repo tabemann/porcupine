@@ -23,6 +23,7 @@ library
                   Control.Concurrent.Porcupine.Node,
                   Control.Concurrent.Porcupine.Process,
                   Control.Concurrent.Porcupine.GenericServer
+                  Control.Concurrent.Porcupine.SocketPort
   other-modules:
                  Control.Concurrent.Porcupine.Private.Types
   hs-source-dirs:

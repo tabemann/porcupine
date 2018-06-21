@@ -452,7 +452,8 @@ data Message = UserMessage { umsgSourceId :: !SourceId,
                               spawnEntry :: !Entry,
                               spawnProcessId :: !ProcessId,
                               spawnHeader :: !Header,
-                              spawnPayload :: !Payload }
+                              spawnPayload :: !Payload,
+                              spawnListenEnd :: !Bool }
              | QuitMessage { quitProcessId :: !ProcessId,
                              quitHeader :: !Header,
                              quitPayload :: !Payload }

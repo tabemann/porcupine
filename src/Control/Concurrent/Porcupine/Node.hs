@@ -187,7 +187,7 @@ handleLocalMessage UserMessage{..} = do
 handleLocalMessage SpawnMessage{..} = do
   logMessage $ printf "GOT SpawnMessage\n"
   handleLocalSpawnMessage spawnSourceId spawnEntry spawnProcessId spawnHeader
-    spawnPayload
+    spawnPayload spawnListenEnd
 handleLocalMessage QuitMessage{..} = do
   logMessage $ printf "GOT QuitMessage FROM %s\n" $ show quitProcessId
   handleLocalQuitMessage quitProcessId quitHeader quitPayload
@@ -368,8 +368,8 @@ handleLocalUserMessage sourceId destId header payload = do
 
 -- | Handle a local spawn message.
 handleLocalSpawnMessage :: SourceId -> Entry -> ProcessId -> Header ->
-                           Payload -> NodeM ()
-handleLocalSpawnMessage sourceId entry processId header payload = do
+                           Payload -> Bool -> NodeM ()
+handleLocalSpawnMessage sourceId entry processId header payload listenEnd = do
   state <- St.get
   queue <- liftIO $ atomically newTQueue
   extra <- liftIO . atomically $ newTVar S.empty
@@ -390,12 +390,21 @@ handleLocalSpawnMessage sourceId entry processId header payload = do
       LocalReceived { lrcvMessage =
                       EndMessage { endProcessId = processId,
                                    endException = maybeException } }
-  let processState = ProcessState { pstateInfo = processInfo,
-                                    pstateAsync = asyncThread,
-                                    pstateTerminating = False,
-                                    pstateEndMessage = Nothing,
-                                    pstateEndCause = Nothing,
-                                    pstateEndListeners = S.empty }
+  let processState =
+        ProcessState { pstateInfo = processInfo,
+                       pstateAsync = asyncThread,
+                       pstateTerminating = False,
+                       pstateEndMessage = Nothing,
+                       pstateEndCause = Nothing,
+                       pstateEndListeners =
+                         if listenEnd
+                         then case sourceId of
+                                NoSource -> Nothing
+                                NormalSource pid ->
+                                  S.singleton (ProcessDest pid, 1)
+                                CauseSource{..} ->
+                                  S.singleton (ProcessDest causeSourceId, 1)
+                         else S.empty }
   St.modify $ \state ->
     state { nodeProcesses = M.insert processId processState $
                             nodeProcesses state }
@@ -1437,6 +1446,7 @@ connectRemote pnid = do
                  liftIO $ handshakeWithSocket nid queue terminate socket
                    key (Just pnid)
                Left _ -> do
+                 liftIO $ NS.close socket
                  liftIO . atomically . writeTQueue queue $
                    RemoteConnectFailed { rcflNodeId = pnid }
            Nothing -> return ()

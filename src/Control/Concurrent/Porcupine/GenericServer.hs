@@ -41,6 +41,8 @@ module Control.Concurrent.Porcupine.GenericServer
    start,
    stop,
    send,
+   lookup,
+   tryLookup,
    listenEnd)
 
 where
@@ -107,6 +109,14 @@ stop (GenericServer pid) =
 send :: GenericServer -> P.Header -> P.Payload -> P.Process ()
 send (GenericServer pid) header payload =
   P.send (P.ProcessDest pid) header payload
+
+-- | Look up a generic server.
+lookup :: P.Name -> P.Process GenericServer
+lookup name = GenericServer <$> P.lookup name
+
+-- | Try to look up a generic server.
+tryLookup :: P.Name -> P.Process (Maybe GenericServer)
+tryLookup name = (GenericServer <$>) <$> P.tryLookup name
 
 -- | Listen for generic server termination.
 listenEnd :: GenericServer -> P.Process ()

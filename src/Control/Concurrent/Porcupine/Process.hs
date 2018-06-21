@@ -60,6 +60,10 @@ module Control.Concurrent.Porcupine.Process
    spawn',
    spawnAsProxy,
    spawnAsProxy',
+   spawnListenEnd,
+   spawnListenEnd',
+   spawnListenEndAsProxy,
+   spawnListenEndAsProxy',
    quit,
    quit',
    kill,
@@ -85,6 +89,9 @@ module Control.Concurrent.Porcupine.Process
    newGroupId,
    connect,
    connectRemote,
+   catch,
+   catchJust,
+   handle,
    listenEnd,
    unlistenEnd,
    listenEndAsProxy,
@@ -119,6 +126,7 @@ import Control.Concurrent.STM.TQueue (TQueue,
                                       tryReadTQueue,
                                       writeTQueue)
 import qualified Control.Monad.Trans.State.Strict as St
+import qualified Control.Exception.Base as E
 import Data.Functor ((<$>))
 import Control.Monad ((=<<))
 import Control.Monad.IO.Class (MonadIO (..))
@@ -162,7 +170,8 @@ spawnInit entry node header payload = do
                        spawnEntry = entry,
                        spawnProcessId = spawnedPid,
                        spawnHeader = header,
-                       spawnPayload = payload } 
+                       spawnPayload = payload,
+                       spawnListenEnd = False } 
   atomically . writeTQueue (nodeQueue node) $
     LocalReceived { lrcvMessage = message }
   return spawnedPid
@@ -182,7 +191,8 @@ spawn entry header payload = do
                            spawnEntry = entry,
                            spawnProcessId = spawnedPid,
                            spawnHeader = header,
-                           spawnPayload = payload }
+                           spawnPayload = payload,
+                           spawnListenEnd = False }
   return spawnedPid
 
 -- | Spawn a process on the local node normally without instantiation parameters
@@ -198,13 +208,52 @@ spawnAsProxy entry pid header payload = do
                            spawnEntry = entry,
                            spawnProcessId = spawnedPid,
                            spawnHeader = header,
-                           spawnPayload = payload } 
+                           spawnPayload = payload,
+                           spawnListenEnd = False } 
 
 -- | Spawn a process on the local node normally for another process without
 -- instantiation parameters (because they are normally only needed for remote
 -- spawns).
 spawnAsProxy' :: Process () -> ProcessId -> Process ()
 spawnAsProxy' action pid = spawnAsProxy (\_ _ _ -> action) pid BS.empty BS.empty
+
+-- | Spawn a process on the local node normally and atomically listen for end.
+spawnListenEnd :: Entry -> Header -> Payload -> Process ProcessId
+spawnListenEnd entry header payload = do
+  pid <- myProcessId
+  spawnedPid <- newProcessId
+  sendRaw $ SpawnMessage { spawnSourceId = NormalSource pid,
+                           spawnEntry = entry,
+                           spawnProcessId = spawnedPid,
+                           spawnHeader = header,
+                           spawnPayload = payload,
+                           spawnListenEnd = True }
+  return spawnedPid
+
+-- | Spawn a process on the local node normally without instantiation parameters
+-- (because they are normally only needed for remote spawns) and atomically
+-- listen for end.
+spawnListenEnd' :: Process () -> Process ProcessId
+spawnListenEnd' action = spawnListenEnd (\_ _ _ -> action) BS.empty BS.empty
+
+-- | Spawn a process on the local node normally for another process and
+-- atomically listen for end.
+spawnListenEndAsProxy :: Entry -> ProcessId -> Header -> Payload -> Process ()
+spawnListenEndAsProxy entry pid header payload = do
+  spawnedPid <- newProcessId
+  sendRaw $ SpawnMessage { spawnSourceId = NormalSource pid,
+                           spawnEntry = entry,
+                           spawnProcessId = spawnedPid,
+                           spawnHeader = header,
+                           spawnPayload = payload,
+                           spawnListenEnd = True } 
+
+-- | Spawn a process on the local node normally for another process without
+-- instantiation parameters (because they are normally only needed for remote
+-- spawns) and atomically listen for End.
+spawnListenEndAsProxy' :: Process () -> ProcessId -> Process ()
+spawnListenEndAsProxy' action pid =
+  spawnListenEndAsProxy (\_ _ _ -> action) pid BS.empty BS.empty
 
 -- | Send a message to a process or group.
 send :: DestId -> Header -> Payload -> Process ()
@@ -471,6 +520,34 @@ connectRemote fixedNum address randomNum = do
                              pnidAddress = Just $ toSockAddr' address,
                              pnidRandomNum = randomNum }
   sendRaw $ ConnectRemoteMessage { conrNodeId = pnid }
+
+-- | Handle an exception.
+catch :: E.Exception e => Process a -> (e -> Process a) -> Process a
+catch action handler = do
+  state <- St.get
+  (value, state) <- E.catch (St.runStateT action state)
+                    (\e -> St.runStateT (handler e) state)
+  St.put state
+  return value
+
+-- | Handle an exception with a selection predicate.
+catchJust :: E.Exception e => (e -> Maybe b) -> Process a -> (b -> Process a) ->
+             Process a
+catchJust pred action handler = do
+  state <- St.get
+  (value, state) <- E.catchJust pred (St.runStateT action state)
+                    (\b -> St.runStateT (handler b) state)
+  St.put state
+  return value
+
+-- | Handle an exception, with arguments reversed.
+handle :: E.Exception e => (e -> Process a) -> Process a -> Process a
+handle = flip catch
+
+-- | Handle an exception with a selection predicate, with arguments reordered.
+handleJust :: E.Exception e => (e -> Maybe b) -> (b -> Process a) ->
+              Process a -> Process a
+handleJust pred handler action = catchJust pred action handler
 
 -- | Do the basic work of sending a message.
 sendRaw :: Message -> Process ()

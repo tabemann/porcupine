@@ -48,10 +48,10 @@ module Control.Concurrent.Porcupine.GenericServer
 where
 
 import qualified Control.Concurrent.Porcupine.Process as P
+import qualified Control.Concurrent.Porcupine.Utility as U
 import qualified Data.Text as T
 import qualified Data.Sequence as S
 import qualified Data.Binary as B
-import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString as BS
 import Data.Sequence ((><))
 import Data.Functor ((<$>))
@@ -103,7 +103,7 @@ start name quitOnEnd groups listened handlers state = do
 -- | Stop generic server.
 stop :: GenericServer -> P.Process ()
 stop (GenericServer pid) =
-  P.send (P.ProcessDest pid) (encode ("genericServerExit" :: T.Text)) BS.empty
+  P.send (P.ProcessDest pid) genericServerExitHeader BS.empty
 
 -- | Send a message to a generic server.
 send :: GenericServer -> P.Header -> P.Payload -> P.Process ()
@@ -134,6 +134,9 @@ startRun state = do
   mapM_ P.listenEnd $ stListened state
   run state
 
+-- | Generic server exit header
+genericServerExitHeader = U.encode ("genericServerExit" :: T.Text)
+
 -- | Run the generic server.
 run :: State a -> P.Process ()
 run state = do
@@ -145,18 +148,13 @@ run state = do
   stState <- P.receive $ handlers >< (handleCase <$> stHandlers state)
   run $ state { stState = stState }
   where onNormalEndDoQuit _ _ header _
-          | header == encode ("genericQuit" :: T.Text) = Just $ quit state
-          | header == encode ("genericEnd" :: T.Text) = Just $ quit state
+          | U.isNormalEnd header = Just $ quit state
           | True = Nothing
         onFailDoQuit _ _ header _
-          | header == encode ("exceptionExit" :: T.Text) = Just $ quit state
-          | header == encode ("remoteConnectFailed" :: T.Text) =
-            Just $ quit state
-          | header == encode ("remoteDisconnected" :: T.Text) =
-            Just $ quit state
+          | U.isFail header = Just $ quit state
           | True = Nothing
         doExit _ _ header _
-          | header == encode ("genericServerExit" :: T.Text) = Just $ quit state
+          | header == genericServerExitHeader = Just $ quit state
           | True = Nothing
         handleCase (Handler match action) sid did header payload =
           if match (stState state) sid did header payload
@@ -175,11 +173,3 @@ quit state = do
     Nothing -> return ()
   P.quit'
   return $ stState state
-
--- | Decode data from a strict ByteString.
-decode :: B.Binary a => BS.ByteString -> a
-decode = B.decode . BSL.fromStrict
-
--- | Encode data to a strict ByteString.
-encode :: B.Binary a => a -> BS.ByteString
-encode = BSL.toStrict . B.encode

@@ -46,7 +46,7 @@ import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Binary as B
 import qualified Data.Sequence as S
 import qualified Data.Text as T
-import qualified Data.HashMap.Lazy as M
+import qualified Data.HashMap.Strict as M
 import qualified System.Random as R
 import qualified Network.Socket as NS
 import qualified Network.Socket.ByteString as NSB
@@ -419,10 +419,16 @@ handleLocalQuitMessage pid header payload = do
                         pstateEndMessage =
                           case pstateEndMessage process of
                             Just message -> Just message
-                            Nothing -> Just (header, payload),
+                            Nothing ->
+                              Just (quitHeader,
+                                    packageMessage header payload),
                         pstateTerminating = True }
                     else process)
     pid
+
+-- | Quit header
+quitHeader :: BS.ByteString
+quitHeader = encode ("quit" :: T.Text)
 
 -- | Handle a local end message.
 handleLocalEndMessage :: ProcessId -> Maybe SomeException -> NodeM ()
@@ -440,14 +446,18 @@ handleLocalEndMessage processId exception = do
                 Just asyncException
                   | asyncException /= ThreadKilled &&
                     asyncException /= UserInterrupt ->
-                      Just (encode ("exceptionExit" :: T.Text),
-                             encode . T.pack $ show exception)
+                      Just (diedHeader,
+                            encode . T.pack $ show exception)
                   | True -> Nothing
                 Nothing -> 
-                  Just (encode ("exceptionExit" :: T.Text),
-                         encode . T.pack $ show exception)
+                  Just (diedHeader,
+                        encode . T.pack $ show exception)
             Nothing -> Nothing
       sendEndMessageForProcess process message
+
+-- | Died header.
+diedHeader :: BS.ByteString
+diedHeader = encode ("died" :: T.Text)
 
 -- | Handle a local kill message.
 handleLocalKillMessage :: ProcessId -> DestId -> Header -> Payload -> NodeM ()
@@ -899,7 +909,7 @@ sendEndMessageForProcess process message = do
           Nothing ->
             case message of
               Just message -> message
-              Nothing -> (encode ("genericEnd" :: T.Text), BS.empty)
+              Nothing -> (encode ("ended" :: T.Text), BS.empty)
       pid = procId $ pstateInfo process
       sourceId =
         case pstateEndCause process of
@@ -944,12 +954,18 @@ killLocalProcess sourcePid destPid header payload = do
                             pstateEndMessage =
                               case pstateEndMessage process of
                                 Just message -> Just message
-                                Nothing -> Just (header, payload),
+                                Nothing ->
+                                  Just (killeHeader,
+                                        packageMessage header payload),
                             pstateEndCause = Just sourcePid,
                             pstateTerminating = True })
           destPid
       else return ()
     Nothing -> return ()
+
+-- | Killed header
+killedHeader :: BS.ByteString
+killedHeader = encode ("killed" :: T.Text)
 
 -- | Kill a group.
 killGroup :: ProcessId -> GroupId -> Header -> Payload -> NodeM ()
@@ -1468,7 +1484,8 @@ handshakeWithSocket nid queue terminate socket key pnid = do
                       atomically $ putTMVar doneShuttingDown ()
     let messageData = encode $ RemoteHelloMessage { rheloNodeId = nid,
                                                     rheloKey = key }
-        messageLengthField = encode $ BS.length messageData
+        messageLengthField =
+          encode $ (fromIntegral $ BS.length messageData :: Word64)
         magicField = encode magicValue
         fullMessageData =
           BS.append magicField $ BS.append messageLengthField messageData
@@ -1651,6 +1668,11 @@ updateRemoteGroups nid = do
         sendRemoteMessage nid $
           RemoteListenEndMessage { rlendListenedId = GroupDest $ groupId group,
                                    rlendListenerId = did }
+
+-- | Put a header and payload in a message container and then encode it.
+packageMessage :: Header -> Payload -> BS.ByteString
+packageMessage header payload =
+  encode $ MessageContainer { mcontHeader = header, mcontPayload = payload }
 
 -- | Decode data from a strict ByteString.
 decode :: B.Binary a => BS.ByteString -> a

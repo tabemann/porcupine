@@ -62,7 +62,8 @@ module Control.Concurrent.Porcupine.Private.Types
    Event (..),
    RemoteMessage (..),
    UserRemoteConnectFailed (..),
-   UserRemoteDisconnected (..))
+   UserRemoteDisconnected (..),
+   MessageContainer (..))
 
 where
 
@@ -86,7 +87,7 @@ import Network.Socket (Socket,
 import System.Random (StdGen)
 import Control.Monad (Monad)
 import Control.Monad.Trans.State.Strict (StateT)
-import Data.HashMap.Lazy (HashMap)
+import Data.HashMap.Strict (HashMap)
 import Text.Printf (printf)
 import Data.Binary (Binary (..))
 import Data.Binary.Get (Get)
@@ -760,3 +761,20 @@ instance Show UserRemoteDisconnected where
 
 -- | Remote node disconnected message Hashable instance
 instance Hashable UserRemoteDisconnected
+
+-- | Message container type.
+data MessageContainer = MessageContainer { mcontHeader :: BS.ByteString,
+                                           mcontPayload :: BS.ByteString }
+                        deriving (Eq, Ord, Generic)
+
+-- | Message container Binary instance.
+instance Binary MessageContainer where
+  put MessageContainer{..} = do put mcontHeader
+                                put mcontPayload
+  get = do header <- get
+           payload <- get
+           return $ MessageContainer { mcontHeader = header,
+                                       mcontPayload = payload }
+
+-- | Message container Hashable instance.
+instance Hashable MessageContainer

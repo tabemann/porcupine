@@ -48,12 +48,10 @@ module Control.Concurrent.Porcupine.Process
    DestId (..),
    UserRemoteConnectFailed (..),
    UserRemoteDisconnected (..),
+   MessageContainer (..),
    myProcessId,
    myNodeId,
    nodeIdOfProcessId,
-   nodeIdOfSourceId,
-   nodeIdOfDestId,
-   processIdOfSourceId,
    spawnInit,
    spawnInit',
    spawn,
@@ -105,7 +103,7 @@ import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Binary as B
 import qualified Data.Sequence as S
 import qualified Data.Text as T
-import qualified Data.HashMap.Lazy as M
+import qualified Data.HashMap.Strict as M
 import qualified System.Random as R
 import qualified Network.Socket as NS
 import Data.Sequence (ViewL (..))
@@ -143,23 +141,6 @@ myNodeId = Process $ nodeId . procNode <$> St.get
 -- | Get node Id of process Id
 nodeIdOfProcessId :: ProcessId -> NodeId
 nodeIdOfProcessId = pidNodeId
-
--- | Get node Id of destination Id
-nodeIdOfDestId :: DestId -> Maybe NodeId
-nodeIdOfDestId (ProcessDest pid) = Just $ pidNodeId pid
-nodeIdOfDestId (GroupDest _) = Nothing
-
--- | Get node Id of source Id
-nodeIdOfSourceId :: SourceId -> Maybe NodeId
-nodeIdOfSourceId NoSource = Nothing
-nodeIdOfSourceId (NormalSource pid) = Just $ pidNodeId pid
-nodeIdOfSourceId CauseSource{..} = Just $ pidNodeId causeSourceId
-
--- | Process id of source id
-processIdOfSourceId :: SourceId -> Maybe ProcessId
-processIdOfSourceId NoSource = Nothing
-processIdOfSourceId (NormalSource pid) = Just pid
-processIdOfSourceId CauseSource{..} = Just causeSourceId
 
 -- | Spawn a process on the local node without a preexisting process.
 spawnInit :: Entry -> Node -> Header -> Payload -> IO ProcessId

@@ -22,6 +22,7 @@ library
   exposed-modules:
                   Control.Concurrent.Porcupine.Node,
                   Control.Concurrent.Porcupine.Process,
+                  Control.Concurrent.Porcupine.Utility,
                   Control.Concurrent.Porcupine.GenericServer
                   Control.Concurrent.Porcupine.SocketPort
   other-modules:

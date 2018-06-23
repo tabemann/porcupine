@@ -454,7 +454,7 @@ data Message = UserMessage { umsgSourceId :: !SourceId,
                               spawnProcessId :: !ProcessId,
                               spawnHeader :: !Header,
                               spawnPayload :: !Payload,
-                              spawnListenEnd :: !Bool }
+                              spawnEndListeners :: !(Seq DestId) }
              | QuitMessage { quitProcessId :: !ProcessId,
                              quitHeader :: !Header,
                              quitPayload :: !Payload }
@@ -763,8 +763,8 @@ instance Show UserRemoteDisconnected where
 instance Hashable UserRemoteDisconnected
 
 -- | Message container type.
-data MessageContainer = MessageContainer { mcontHeader :: BS.ByteString,
-                                           mcontPayload :: BS.ByteString }
+data MessageContainer = MessageContainer { mcontHeader :: ByteString,
+                                           mcontPayload :: ByteString }
                         deriving (Eq, Ord, Generic)
 
 -- | Message container Binary instance.

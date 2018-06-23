@@ -58,6 +58,7 @@ import Data.Functor ((<$>))
 import Control.Monad (mapM_,
                       (=<<))
 import Text.Printf (printf)
+import Prelude hiding (lookup)
 
 -- | Generic server type
 newtype GenericServer = GenericServer P.ProcessId
@@ -111,12 +112,20 @@ send (GenericServer pid) header payload =
   P.send (P.ProcessDest pid) header payload
 
 -- | Look up a generic server.
-lookup :: P.Name -> P.Process GenericServer
-lookup name = GenericServer <$> P.lookup name
+lookup :: P.Name -> P.Process (Maybe GenericServer)
+lookup name = do
+  did <- P.lookup name
+  case did of
+    P.ProcessDest pid -> return . Just $ GenericServer pid
+    P.GroupDest _ -> return Nothing
 
 -- | Try to look up a generic server.
 tryLookup :: P.Name -> P.Process (Maybe GenericServer)
-tryLookup name = (GenericServer <$>) <$> P.tryLookup name
+tryLookup name = do
+  did <- P.tryLookup name
+  case did of
+    Just (P.ProcessDest pid) -> return . Just $ GenericServer pid
+    _ -> return Nothing
 
 -- | Listen for generic server termination.
 listenEnd :: GenericServer -> P.Process ()

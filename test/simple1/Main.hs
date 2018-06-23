@@ -32,6 +32,7 @@
 
 import qualified Control.Concurrent.Porcupine.Process as P
 import qualified Control.Concurrent.Porcupine.Node as PN
+import qualified Control.Concurrent.Porcupine.Utility as U
 import qualified Data.Text as T
 import Data.Text.IO (putStrLn)
 import qualified Data.Binary as B

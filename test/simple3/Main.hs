@@ -32,6 +32,7 @@
 
 import qualified Control.Concurrent.Porcupine.Process as P
 import qualified Control.Concurrent.Porcupine.Node as PN
+import qualified Control.Concurrent.Porcupine.Utility as U
 import qualified Data.Text as T
 import Data.Text.IO (putStrLn)
 import qualified Data.Binary as B
@@ -108,8 +109,7 @@ simpleMessageSender pid0 pid1 address = do
   liftIO $ putStrLn "Waiting for termination..."
   replicateM 2 $ do
     P.receive [\sid did header payload ->
-                 if header == encode ("remoteDisconnected" :: T.Text) ||
-                    header == encode ("genericQuit" :: T.Text)
+                 if U.isEnd header
                  then Just . liftIO $ putStrLn "Received end"
                  else Nothing]
   liftIO $ putStrLn "Shutting down..."

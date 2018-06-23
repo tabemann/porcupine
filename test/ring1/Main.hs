@@ -32,6 +32,7 @@
 
 import qualified Control.Concurrent.Porcupine.Process as P
 import qualified Control.Concurrent.Porcupine.Node as PN
+import qualified Control.Concurrent.Porcupine.Utility as U
 import qualified Data.Text as T
 import Data.Text.IO (putStrLn)
 import qualified Data.Binary as B
@@ -119,7 +120,7 @@ ringSender myName names addresses count = do
       P.send nextDid header payload
       liftIO $ printf "Sent exit\n"
       let nids = foldl' (\prev did ->
-                           case P.nodeIdOfDestId did of
+                           case U.nodeIdOfDestId did of
                              Just nid -> prev |> nid
                              Nothing -> prev) S.empty dids
       handleIncoming dids nids
@@ -136,9 +137,9 @@ ringSender myName names addresses count = do
                          then Just $ do
                            liftIO $ printf "Got exit back\n"
                            return dids
-                         else if header == encode ("genericQuit" :: T.Text)
+                         else if U.isEnd header
                          then Just $ do
-                           case P.processIdOfSourceId sid of
+                           case U.processIdOfSourceId sid of
                              Just pid -> do
                                liftIO . printf "Got quit for %s\n" $ show pid
                                let dids' =

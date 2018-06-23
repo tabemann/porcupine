@@ -187,7 +187,7 @@ handleLocalMessage UserMessage{..} = do
 handleLocalMessage SpawnMessage{..} = do
   logMessage $ printf "GOT SpawnMessage\n"
   handleLocalSpawnMessage spawnSourceId spawnEntry spawnProcessId spawnHeader
-    spawnPayload spawnListenEnd
+    spawnPayload spawnEndListeners
 handleLocalMessage QuitMessage{..} = do
   logMessage $ printf "GOT QuitMessage FROM %s\n" $ show quitProcessId
   handleLocalQuitMessage quitProcessId quitHeader quitPayload
@@ -368,8 +368,9 @@ handleLocalUserMessage sourceId destId header payload = do
 
 -- | Handle a local spawn message.
 handleLocalSpawnMessage :: SourceId -> Entry -> ProcessId -> Header ->
-                           Payload -> Bool -> NodeM ()
-handleLocalSpawnMessage sourceId entry processId header payload listenEnd = do
+                           Payload -> S.Seq DestId -> NodeM ()
+handleLocalSpawnMessage sourceId entry processId header payload
+  endListeners = do
   state <- St.get
   queue <- liftIO $ atomically newTQueue
   extra <- liftIO . atomically $ newTVar S.empty
@@ -396,15 +397,7 @@ handleLocalSpawnMessage sourceId entry processId header payload listenEnd = do
                        pstateTerminating = False,
                        pstateEndMessage = Nothing,
                        pstateEndCause = Nothing,
-                       pstateEndListeners =
-                         if listenEnd
-                         then case sourceId of
-                                NoSource -> Nothing
-                                NormalSource pid ->
-                                  S.singleton (ProcessDest pid, 1)
-                                CauseSource{..} ->
-                                  S.singleton (ProcessDest causeSourceId, 1)
-                         else S.empty }
+                       pstateEndListeners = normalizeEndListeners endListeners }
   St.modify $ \state ->
     state { nodeProcesses = M.insert processId processState $
                             nodeProcesses state }
@@ -420,15 +413,15 @@ handleLocalQuitMessage pid header payload = do
                           case pstateEndMessage process of
                             Just message -> Just message
                             Nothing ->
-                              Just (quitHeader,
+                              Just (quitHeader',
                                     packageMessage header payload),
                         pstateTerminating = True }
                     else process)
     pid
 
 -- | Quit header
-quitHeader :: BS.ByteString
-quitHeader = encode ("quit" :: T.Text)
+quitHeader' :: BS.ByteString
+quitHeader' = encode ("quit" :: T.Text)
 
 -- | Handle a local end message.
 handleLocalEndMessage :: ProcessId -> Maybe SomeException -> NodeM ()
@@ -955,7 +948,7 @@ killLocalProcess sourcePid destPid header payload = do
                               case pstateEndMessage process of
                                 Just message -> Just message
                                 Nothing ->
-                                  Just (killeHeader,
+                                  Just (killedHeader,
                                         packageMessage header payload),
                             pstateEndCause = Just sourcePid,
                             pstateTerminating = True })
@@ -1376,12 +1369,12 @@ runSocketInput nid input terminate finalize socket buffer = do
 runSocketInput' :: NodeId -> TQueue Event -> NS.Socket ->
                    BS.ByteString -> IO ()
 runSocketInput' nid input socket buffer = do
-  if BS.length buffer < 8
+  if BS.length buffer < word64Size
     then do block <- NSB.recv socket 4096
             if not $ BS.null block
               then runSocketInput' nid input socket $ BS.append buffer block
               else return ()
-    else let (lengthField, rest) = BS.splitAt 8 buffer
+    else let (lengthField, rest) = BS.splitAt word64Size buffer
          in runSocketInput'' nid input socket rest
             (fromIntegral (decode lengthField :: Word64))
 
@@ -1511,7 +1504,7 @@ handshakeWithSocket' nid queue terminate socket key buffer pnid
   continue <- (== Nothing) <$> (atomically $ tryReadTMVar terminate)
   if continue
     then
-      if BS.length buffer < 12
+      if BS.length buffer < word32Size + word64Size
       then do
         block <- catch (Just <$> NSB.recv socket 4096)
                  (\e -> const (return Nothing) (e :: IOException))
@@ -1525,8 +1518,8 @@ handshakeWithSocket' nid queue terminate socket key buffer pnid
             atomically $ readTMVar doneShuttingDown
             NS.close socket
             notifyHandshakeFailure queue pnid
-      else let (magicField, rest) = BS.splitAt 4 buffer
-               (lengthField, rest') = BS.splitAt 8 rest
+      else let (magicField, rest) = BS.splitAt word32Size buffer
+               (lengthField, rest') = BS.splitAt word64Size rest
            in if decode magicField == magicValue
               then handshakeWithSocket'' nid queue terminate socket key
                    rest' (fromIntegral (decode lengthField :: Word64)) pnid
@@ -1673,6 +1666,24 @@ updateRemoteGroups nid = do
 packageMessage :: Header -> Payload -> BS.ByteString
 packageMessage header payload =
   encode $ MessageContainer { mcontHeader = header, mcontPayload = payload }
+
+-- | Normalize end listeners.
+normalizeEndListeners :: S.Seq DestId -> S.Seq (DestId, Integer)
+normalizeEndListeners dids =
+  foldl' (\normalized did ->
+            case S.findIndexL (\(did', _) -> did == did') normalized of
+              Just index ->
+                S.adjust' (\(did, count) -> (did, count + 1)) index normalized
+              Nothing -> normalized |> (did, 1))
+    S.empty dids
+
+-- | Size of an encoded Word32
+word32Size :: Int
+word32Size = BS.length $ encode (0 :: Word32)
+
+-- | Size of an encoded Word64
+word64Size :: Int
+word64Size = BS.length $ encode (0 :: Word64)
 
 -- | Decode data from a strict ByteString.
 decode :: B.Binary a => BS.ByteString -> a

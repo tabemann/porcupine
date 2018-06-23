@@ -32,6 +32,7 @@
 
 import qualified Control.Concurrent.Porcupine.Process as P
 import qualified Control.Concurrent.Porcupine.Node as PN
+import qualified Control.Concurrent.Porcupine.Utility as U
 import qualified Data.Text as T
 import Data.Text.IO (putStrLn)
 import qualified Data.Binary as B
@@ -109,9 +110,7 @@ ringSender address pid count = do
                         then Just $ do
                           liftIO $ printf "Got text back: %s\n"
                             (decode payload :: T.Text)
-                        else if header ==
-                                encode ("remoteDisconnected" :: T.Text) ||
-                                header == encode ("genericQuit" :: T.Text)
+                        else if U.isEnd header
                         then Just $ do
                           liftIO $ putStrLn "Received end"
                           nid <- P.myNodeId

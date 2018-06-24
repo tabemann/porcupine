@@ -261,6 +261,37 @@ executable porcupine-test-port0
                 random,
                 unordered-containers
   default-language: Haskell2010
+
+executable porcupine-test-port1
+  main-is: Main.hs
+  other-modules:
+  hs-source-dirs:
+                 test/port1
+  ghc-options: -threaded -O2 -rtsopts -with-rtsopts=-N
+  other-extensions:
+                   OverloadedStrings,
+                   OverloadedLists,
+                   RecordWildCards,
+                   DeriveGeneric,
+                   MultiParamTypeClasses,
+                   GeneralizedNewtypeDeriving
+  build-depends:
+                base >=4.7 && <5,
+                porcupine,
+                stm,
+                async,
+                bytestring,
+                text,
+                utf8-string,
+                network,
+                containers >=0.5.8,
+                hashable,
+                binary,
+                transformers,
+                random,
+                unordered-containers
+  default-language: Haskell2010
+
 --
 --test-suite porcupine-test
 --  type: exitcode-stdio-1.0

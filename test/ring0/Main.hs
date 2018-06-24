@@ -68,17 +68,17 @@ ringRepeater :: Int -> P.Process ()
 ringRepeater count = do
   liftIO $ putStrLn "Getting process Id..."
   pid <- P.receive [\_ _ header payload ->
-                      if header == encode ("otherProcess" :: T.Text)
-                      then Just $ return $ (decode payload :: P.ProcessId)
+                      if header == U.encode ("otherProcess" :: T.Text)
+                      then Just $ return $ (U.decode payload :: P.ProcessId)
                       else Nothing]
   liftIO $ putStrLn "Starting to receive messages..."
   loop pid count
   where loop pid count = do
           P.receive [\_ _ header payload ->
-                        if header == encode ("textMessage" :: T.Text)
+                        if header == U.encode ("textMessage" :: T.Text)
                         then Just $ do
                           liftIO $ printf "Got text: %s\n"
-                            (decode payload :: T.Text)
+                            (U.decode payload :: T.Text)
                           P.send (P.ProcessDest pid) header payload
                         else Nothing]
           if count > 1
@@ -95,21 +95,21 @@ ringSender address pid count = do
   liftIO . printf "Listening for process %s termination...\n" $ show pid
   P.listenEnd $ P.ProcessDest pid
   myPid <- P.myProcessId
-  let header = encode ("otherProcess" :: T.Text)
-      payload = encode myPid
+  let header = U.encode ("otherProcess" :: T.Text)
+      payload = U.encode myPid
   P.send (P.ProcessDest pid) header payload
   forM ([0..count - 1] :: [Int]) $ \i -> do
-    let header = encode ("textMessage" :: T.Text)
-        payload = encode . T.pack $ printf "%d" i
+    let header = U.encode ("textMessage" :: T.Text)
+        payload = U.encode . T.pack $ printf "%d" i
     P.send (P.ProcessDest pid) header payload
     liftIO $ printf "Sent: %d\n" i
   loop
   where loop = do
           P.receive [\_ _ header payload ->
-                        if header == encode ("textMessage" :: T.Text)
+                        if header == U.encode ("textMessage" :: T.Text)
                         then Just $ do
                           liftIO $ printf "Got text back: %s\n"
-                            (decode payload :: T.Text)
+                            (U.decode payload :: T.Text)
                         else if U.isEnd header
                         then Just $ do
                           liftIO $ putStrLn "Received end"
@@ -118,7 +118,7 @@ ringSender address pid count = do
                           P.quit'
                         else Just $ do
                           liftIO $ printf "Got message: %s\n"
-                            (decode header :: T.Text)]
+                            (U.decode header :: T.Text)]
           loop
 
 -- | A ring messaging test.
@@ -159,11 +159,3 @@ getSockAddr port = do
 -- | The entry point.
 main :: IO ()
 main = ringMessagingTest
-
--- | Decode data from a strict ByteString.
-decode :: B.Binary a => BS.ByteString -> a
-decode = B.decode . BSL.fromStrict
-
--- | Encode data to a strict ByteString
-encode :: B.Binary a => a -> BS.ByteString
-encode = BSL.toStrict . B.encode

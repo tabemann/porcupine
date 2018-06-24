@@ -56,7 +56,15 @@ module Control.Concurrent.Porcupine.SocketPort
    assign,
    unassign,
    listenEnd,
+   listenEndAsProxy,
    unlistenEnd,
+   unlistenEndAsProxy,
+   portListenEnd,
+   portUnlistenEnd,
+   isEnd,
+   isNormalEnd,
+   isFail,
+   accept,
    listenerLookup,
    listenerTryLookup,
    listenerSubscribe,
@@ -64,7 +72,12 @@ module Control.Concurrent.Porcupine.SocketPort
    listenerAssign,
    listenerUnassign,
    listenerListenEnd,
-   listenerUnlistenEnd)
+   listenerListenEndAsProxy,
+   listenerUnlistenEnd,
+   listenerUnlistenEndAsProxy,
+   listenerIsEnd,
+   listenerIsNormalEnd,
+   listenerIsFail)
 
 where
 
@@ -82,7 +95,8 @@ import qualified Network.Socket as NS
 import qualified Network.Socket.ByteString as NSB
 import Data.Sequence ((|>))
 import Data.Foldable (foldl')
-import Control.Monad (forM_)
+import Control.Monad (forM_,
+                      when)
 import Control.Monad.IO.Class (MonadIO (..))
 import Control.Exception.Base (SomeException,
                                Exception (..),
@@ -98,6 +112,7 @@ import Data.Monoid ((<>),
                     mconcat)
 import Text.Printf (printf)
 import Prelude hiding (lookup)
+import Debug.Trace (trace)
 
 -- | Socket port type
 newtype SocketPort = SocketPort P.ProcessId
@@ -151,6 +166,14 @@ instance B.Binary AutoSetupResponse where
 -- | The magic value
 magicValue :: Word32
 magicValue = 0xF000BAA4
+
+-- | Do log or not
+logActive :: Bool
+logActive = True
+
+-- | Log a message.
+logMessage :: MonadIO a => String -> a ()
+logMessage string = when logActive . liftIO $ putStr string
 
 -- | Connect to a socket listener.
 connect :: NS.SockAddr -> P.Key -> S.Seq P.DestId -> S.Seq P.DestId ->
@@ -251,15 +274,60 @@ assign name (SocketPort pid) = P.assign name $ P.ProcessDest pid
 unassign :: P.Name -> SocketPort -> P.Process ()
 unassign name (SocketPort pid) = P.unassign name $ P.ProcessDest pid
 
+-- | Listen for socket port end.
+listenEnd :: SocketPort -> P.Process ()
+listenEnd (SocketPort pid) = P.listenEnd $ P.ProcessDest pid
+
+-- | Set listening for socket port end as a proxy.
+listenEndAsProxy :: SocketPort -> P.DestId -> P.Process ()
+listenEndAsProxy (SocketPort pid) did =
+  P.listenEndAsProxy (P.ProcessDest pid) did
+
+-- | Stop listening for socket port end.
+unlistenEnd :: SocketPort -> P.Process ()
+unlistenEnd (SocketPort pid) = P.unlistenEnd $ P.ProcessDest pid
+
+-- | Stop listening for socket port end as a proxy.
+unlistenEndAsProxy :: SocketPort -> P.DestId -> P.Process ()
+unlistenEndAsProxy (SocketPort pid) did =
+  P.unlistenEndAsProxy (P.ProcessDest pid) did
+
 -- | Set a socket port to listen for process end.
-listenEnd :: P.DestId -> SocketPort -> P.Process ()
-listenEnd listenedId (SocketPort pid) =
+portListenEnd :: P.DestId -> SocketPort -> P.Process ()
+portListenEnd listenedId (SocketPort pid) =
   P.listenEndAsProxy listenedId $ P.ProcessDest pid
 
 -- | Set a socket port to not listen for process end.
-unlistenEnd :: P.DestId -> SocketPort -> P.Process ()
-unlistenEnd listenedId (SocketPort pid) =
+portUnlistenEnd :: P.DestId -> SocketPort -> P.Process ()
+portUnlistenEnd listenedId (SocketPort pid) =
   P.unlistenEndAsProxy listenedId $ P.ProcessDest pid
+
+-- | Get whether a socket port has ended.
+isEnd :: SocketPort -> P.SourceId -> P.Header -> Bool
+isEnd (SocketPort pid) sid header =
+  U.isEnd header && U.processIdOfSourceId sid == Just pid
+
+-- | Get whether a socket port has ended normally.
+isNormalEnd :: SocketPort -> P.SourceId -> P.Header -> Bool
+isNormalEnd (SocketPort pid) sid header =
+  U.isNormalEnd header && U.processIdOfSourceId sid == Just pid
+
+-- | Get whether a socket port has failed.
+isFail :: SocketPort -> P.SourceId -> P.Header -> Bool
+isFail (SocketPort pid) sid header =
+  U.isFail header && U.processIdOfSourceId sid == Just pid
+
+-- | Get whether a socket port has been accepted, and if it has, return the
+-- socket port.
+accept :: SocketListener -> P.SourceId -> P.Header -> P.Payload ->
+          Maybe SocketPort
+accept (SocketListener listenerPid) sid header payload
+  | header == acceptedHeader
+    && U.processIdOfSourceId sid == Just listenerPid =
+      case U.tryDecode payload :: Either T.Text P.ProcessId of
+        Right pid -> Just $ SocketPort pid
+        Left _ -> Nothing
+  | True = Nothing
 
 -- | Look up a socket listener.
 listenerLookup :: P.Name -> P.Process (Maybe SocketListener)
@@ -293,15 +361,38 @@ listenerAssign name (SocketListener pid) = P.assign name $ P.ProcessDest pid
 listenerUnassign :: P.Name -> SocketListener -> P.Process ()
 listenerUnassign name (SocketListener pid) = P.unassign name $ P.ProcessDest pid
 
--- | Set a socket listener to listen for process end.
-listenerListenEnd :: P.DestId -> SocketListener -> P.Process ()
-listenerListenEnd listenedId (SocketListener pid) =
-  P.listenEndAsProxy listenedId $ P.ProcessDest pid
+-- | Listen for socket listener end.
+listenerListenEnd :: SocketListener -> P.Process ()
+listenerListenEnd (SocketListener pid) = P.listenEnd $ P.ProcessDest pid
 
--- | Set a socket listener to not listen for process end.
-listenerUnlistenEnd :: P.DestId -> SocketListener -> P.Process ()
-listenerUnlistenEnd listenedId (SocketListener pid) =
-  P.unlistenEndAsProxy listenedId $ P.ProcessDest pid
+-- | Set listening for socket listener end as a proxy.
+listenerListenEndAsProxy :: SocketListener -> P.DestId -> P.Process ()
+listenerListenEndAsProxy (SocketListener pid) did =
+  P.listenEndAsProxy (P.ProcessDest pid) did
+
+-- | Stop listening for socket listener end.
+listenerUnlistenEnd :: SocketListener -> P.Process ()
+listenerUnlistenEnd (SocketListener pid) = P.unlistenEnd $ P.ProcessDest pid
+
+-- | Stop listening for socket listener end as a proxy.
+listenerUnlistenEndAsProxy :: SocketListener -> P.DestId -> P.Process ()
+listenerUnlistenEndAsProxy (SocketListener pid) did =
+  P.unlistenEndAsProxy (P.ProcessDest pid) did
+
+-- | Get whether a socket listener has ended.
+listenerIsEnd :: SocketListener -> P.SourceId -> P.Header -> Bool
+listenerIsEnd (SocketListener pid) sid header =
+  U.isEnd header && U.processIdOfSourceId sid == Just pid
+
+-- | Get whether a socket listener has ended normally.
+listenerIsNormalEnd :: SocketListener -> P.SourceId -> P.Header -> Bool
+listenerIsNormalEnd (SocketListener pid) sid header =
+  U.isNormalEnd header && U.processIdOfSourceId sid == Just pid
+
+-- | Get whether a socket listener has failed.
+listenerIsFail :: SocketListener -> P.SourceId -> P.Header -> Bool
+listenerIsFail (SocketListener pid) sid header =
+  U.isFail header && U.processIdOfSourceId sid == Just pid
 
 -- | Start a listener.
 startListener :: NS.SockAddr -> P.Key -> S.Seq P.DestId -> S.Seq P.DestId ->
@@ -310,6 +401,7 @@ startListener sockAddr key registered autoRegister autoEndListeners = do
   socket <- liftIO $ NS.socket (familyOfSockAddr sockAddr) NS.Stream
             NS.defaultProtocol
   handleSocket socket $ do
+    liftIO $ NS.setSocketOption socket NS.ReuseAddr 1
     liftIO $ NS.bind socket sockAddr
     liftIO $ NS.listen socket 5
     myPid <- P.myProcessId
@@ -335,7 +427,9 @@ startListenProcess parentPid socket key = do
 runListenProcess :: P.ProcessId -> NS.Socket -> P.Key -> P.Process ()
 runListenProcess parentPid socket key = do
   (socket', _) <- liftIO $ NS.accept socket
+  logMessage "Got incoming socket\n"
   P.send (P.ProcessDest parentPid) autoSetupRequestHeader BS.empty
+  logMessage "Sent auto setup request to parent process\n"
   response <- P.receive [\sid _ header payload ->
                            if U.processIdOfSourceId sid == Just parentPid
                               && header == autoSetupResponseHeader
@@ -344,10 +438,12 @@ runListenProcess parentPid socket key = do
                                Right response -> Just $ return response
                                Left _ -> Nothing
                            else Nothing]
-  childPid <- P.spawnListenEnd' (startSocketPort socket key
+  logMessage "Got auto setup response from parent process\n"
+  childPid <- P.spawnListenEnd' (startSocketPort socket' key
                                  (asrAutoRegister response))
               (asrAutoEndListeners response)
   P.send (P.ProcessDest parentPid) acceptedHeader $ U.encode childPid
+  runListenProcess parentPid socket key
 
 -- | Run the parent listener process.
 runParentListener :: SocketListenerState -> P.Process ()
@@ -471,6 +567,7 @@ handleAutoSetupRequest state sid _ header payload
                                              slsAutoEndListeners state }
         P.send (P.ProcessDest $ slsListenPid state) autoSetupResponseHeader $
           U.encode response
+        logMessage "Sent auto setup response to listen process\n"
         return state
   | True = Nothing
 
@@ -656,19 +753,29 @@ startReceiveProcess :: P.ProcessId -> NS.Socket -> P.Key -> P.Process ()
 startReceiveProcess parentPid socket key = do
   (magicField, rest) <- receiveBytes socket word32Size BS.empty
   case U.tryDecode magicField :: Either T.Text Word32 of
-    Left _ -> P.quit'
+    Left _ -> do
+      logMessage "Failed to decode magicField\n"
+      P.quit'
     Right magicField
-      | magicField /= magicValue -> P.quit'
+      | magicField /= magicValue -> do
+          logMessage "magicField does not match magicValue\n"
+          P.quit'
       | True -> do
           (keyLength, rest) <- receiveBytes socket word64Size rest
           case U.tryDecode keyLength :: Either T.Text Word64 of
-            Left _ -> P.quit'
+            Left _ -> do
+              logMessage "Failed to decode keyLength\n"
+              P.quit'
             Right keyLength -> do
               (incomingKey, rest) <- receiveBytes socket keyLength rest
               case U.tryDecode incomingKey :: Either T.Text P.Key of
-                Left _ -> P.quit'
+                Left _ -> do
+                  logMessage "Failed to decode incomingKey\n"
+                  P.quit'
                 Right incomingKey
-                  | U.decode incomingKey /= key -> P.quit'
+                  | incomingKey /= key -> do
+                      logMessage "incomingKey does not match key\n"
+                      P.quit'
                   | True -> runReceiveProcess parentPid socket rest
 
 -- | Run receive process
@@ -676,11 +783,15 @@ runReceiveProcess :: P.ProcessId -> NS.Socket -> BS.ByteString -> P.Process ()
 runReceiveProcess parentPid socket buffer = do
   (messageLength, rest) <- receiveBytes socket word64Size buffer
   case U.tryDecode messageLength :: Either T.Text Word64 of
-    Left _ -> P.quit'
+    Left _ -> do
+      logMessage "Failed to decode messageLength\n"
+      P.quit'
     Right messageLength -> do
       (message, rest) <- receiveBytes socket messageLength rest
       case U.tryDecode message :: Either T.Text P.MessageContainer of
-        Left _ -> P.quit'
+        Left _ -> do
+          logMessage "Failed to decode message container\n"
+          P.quit'
         Right _ -> do
           P.send (P.ProcessDest parentPid) receiveRemoteHeader message
           runReceiveProcess parentPid socket rest
@@ -693,13 +804,14 @@ receiveBytes socket length bytes =
   then return $ BS.splitAt (fromIntegral length) bytes
   else do
     newBytes <- P.catch (liftIO $ NSB.recv socket 4096)
-                (\e -> const (do { P.quit'; return BS.empty })
+                (\e -> const (do P.quit'
+                                 return BS.empty)
                        (e :: IOException))
     if BS.length newBytes > 0
-    then receiveBytes socket length $ bytes <> newBytes
-    else do
-      P.quit'
-      return (BS.empty, BS.empty)
+      then receiveBytes socket length $ bytes <> newBytes
+      else do
+        P.quit'
+        return (BS.empty, BS.empty)
 
 -- | Normalize a registered sequence into a registered map.
 normalize :: S.Seq P.DestId -> M.HashMap P.DestId Integer
@@ -776,6 +888,7 @@ handleSocket socket action = do
   P.catch action $ \e -> do
     liftIO $ NS.shutdown socket NS.ShutdownBoth
     liftIO $ NS.close socket
+    logMessage . printf "GOT EXCEPTION: %s\n" $ show e
     liftIO $ throw (e :: SomeException)
 
 -- | Get family of SockAddr

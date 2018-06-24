@@ -70,12 +70,12 @@ simpleMessageReceiver = do
   loop
   where loop = do
           P.receive [\sid did header payload ->
-                       if (decode header :: T.Text) == "messageText"
+                       if header == U.encode ("messageText" :: T.Text)
                        then Just . liftIO . putStrLn . T.pack $
-                            printf "Received %s" (decode payload :: T.Text)
+                            printf "Received %s" (U.decode payload :: T.Text)
                        else Nothing,
                      \sid did header payload ->
-                       if (decode header :: T.Text) == "normalQuit"
+                       if header == U.encode ("normalQuit" :: T.Text)
                        then Just $ do
                          liftIO $ putStrLn "Exiting receive process..."
                          P.quit'
@@ -92,10 +92,10 @@ simpleMessageSender pid node = do
   liftIO $ putStrLn "Starting to send messages..."
   forM_ ([1..100] :: S.Seq Integer) $ \n -> do
     liftIO . putStrLn . T.pack $ printf "Sending %d" n
-    P.send (P.ProcessDest pid) (encode ("messageText" :: T.Text))
-      (encode . T.pack $ printf "%d" n)
+    P.send (P.ProcessDest pid) (U.encode ("messageText" :: T.Text))
+      (U.encode . T.pack $ printf "%d" n)
   liftIO $ putStrLn "Sending message requesting quit..."
-  P.send (P.ProcessDest pid) (encode ("normalQuit" :: T.Text)) BS.empty
+  P.send (P.ProcessDest pid) (U.encode ("normalQuit" :: T.Text)) BS.empty
   liftIO $ putStrLn "Waiting for termination..."
   P.receive [\sid did header payload ->
                if sid == P.NormalSource pid then Just $ return () else Nothing]
@@ -134,11 +134,3 @@ getSockAddr port = do
 -- | The entry point.
 main :: IO ()
 main = simpleMessagingTest
-
--- | Decode data from a strict ByteString.
-decode :: B.Binary a => BS.ByteString -> a
-decode = B.decode . BSL.fromStrict
-
--- | Encode data to a strict ByteString
-encode :: B.Binary a => a -> BS.ByteString
-encode = BSL.toStrict . B.encode

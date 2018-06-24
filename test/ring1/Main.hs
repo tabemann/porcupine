@@ -68,27 +68,27 @@ ringRepeater :: T.Text -> T.Text -> P.Process ()
 ringRepeater myName nextName = do
   myPid <- P.myProcessId
   liftIO $ printf "Assigning \"%s\"...\n" myName
-  P.assign (encode myName) $ P.ProcessDest myPid
+  P.assign (U.encode myName) $ P.ProcessDest myPid
   liftIO $ printf "Looking up \"%s\"...\n" nextName
-  did <- P.lookup $ encode nextName
+  did <- P.lookup $ U.encode nextName
   handleIncoming did
   where handleIncoming did = do
           P.receive [\_ _ header payload ->
-                       if header == encode ("textMessage" :: T.Text)
+                       if header == U.encode ("textMessage" :: T.Text)
                        then Just $ do
                          liftIO $ printf "Got text: %s\n"
-                           (decode payload :: T.Text)
+                           (U.decode payload :: T.Text)
                          P.send did header payload
-                       else if header == encode ("exit" :: T.Text)
+                       else if header == U.encode ("exit" :: T.Text)
                        then Just $ do
                          liftIO $ printf "Got exit\n"
-                         let header = encode ("exit" :: T.Text)
+                         let header = U.encode ("exit" :: T.Text)
                              payload = BS.empty
                          P.send did header payload
                          P.quit'
                        else Just $ do
                          liftIO $ printf "Got message: %s\n"
-                           (decode header :: T.Text)]
+                           (U.decode header :: T.Text)]
           handleIncoming did
 
 -- | Another ring sender.
@@ -97,25 +97,25 @@ ringSender :: T.Text -> S.Seq T.Text -> S.Seq NS.SockAddr -> Int ->
 ringSender myName names addresses count = do
   myPid <- P.myProcessId
   liftIO $ printf "Assigning \"%s\"...\n" myName
-  P.assign (encode myName) $ P.ProcessDest myPid
+  P.assign (U.encode myName) $ P.ProcessDest myPid
   let pairs = S.zip [1..(fromIntegral $ S.length addresses)] addresses
   forM_ pairs $ \(index, address) -> do
     liftIO $ printf "Connecting to %d...\n" index
     P.connectRemote index address Nothing
   dids <- forM names $ \name -> do
     liftIO $ printf "Looking up \"%s\"...\n" name
-    did <- P.lookup $ encode name
+    did <- P.lookup $ U.encode name
     liftIO $ printf "Listening for \"%s\" end...\n" name
     P.listenEnd did
     return did
   case S.viewl dids of
     nextDid :< _ -> do
       forM_ ([0..count - 1] :: S.Seq Int) $ \i -> do
-        let header = encode ("textMessage" :: T.Text)
-            payload = encode . T.pack $ printf "%d" i
+        let header = U.encode ("textMessage" :: T.Text)
+            payload = U.encode . T.pack $ printf "%d" i
         P.send nextDid header payload
         liftIO $ printf "Sent %d\n" i
-      let header = encode ("exit" :: T.Text)
+      let header = U.encode ("exit" :: T.Text)
           payload = BS.empty
       P.send nextDid header payload
       liftIO $ printf "Sent exit\n"
@@ -128,12 +128,12 @@ ringSender myName names addresses count = do
   where handleIncoming dids nids = do
           dids' <-
             P.receive [\sid _ header payload ->
-                         if header == encode ("textMessage" :: T.Text)
+                         if header == U.encode ("textMessage" :: T.Text)
                          then Just $ do
                            liftIO $ printf "Got text back: %s\n"
-                             (decode payload :: T.Text)
+                             (U.decode payload :: T.Text)
                            return dids
-                         else if header == encode ("exit" :: T.Text)
+                         else if header == U.encode ("exit" :: T.Text)
                          then Just $ do
                            liftIO $ printf "Got exit back\n"
                            return dids
@@ -156,7 +156,7 @@ ringSender myName names addresses count = do
                              Nothing -> return dids
                          else Just $ do
                            liftIO $ printf "Got message: %s\n"
-                             (decode header :: T.Text)
+                             (U.decode header :: T.Text)
                            return dids]
           handleIncoming dids' nids
 
@@ -218,11 +218,3 @@ getAddresses = foldM getAddress (Just S.empty)
 -- | The entry point.
 main :: IO ()
 main = ringMessagingTest
-
--- | Decode data from a strict ByteString.
-decode :: B.Binary a => BS.ByteString -> a
-decode = B.decode . BSL.fromStrict
-
--- | Encode data to a strict ByteString
-encode :: B.Binary a => a -> BS.ByteString
-encode = BSL.toStrict . B.encode

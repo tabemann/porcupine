@@ -80,7 +80,7 @@ remoteConnectFailedHeader = encode ("remoteConnectFailed" :: T.Text)
 
 -- | Remote disconnected header
 remoteDisconnectedHeader :: P.Header
-remoteDisconnectedHeader = encode ("remoteDisconnectedHeader" :: T.Text)
+remoteDisconnectedHeader = encode ("remoteDisconnected" :: T.Text)
 
 -- | Get whether a header indicates end.
 isEnd :: P.Header -> Bool
@@ -127,6 +127,7 @@ encode = BSL.toStrict . B.encode
 tryDecode :: B.Binary a => BS.ByteString -> Either T.Text a
 tryDecode bytes =
   case B.decodeOrFail $ BSL.fromStrict bytes of
-    Right (_, 0, value) -> Right value
-    Right (_, _, _) -> Left "bytes are not all consumed"
+    Right (_, bytesConsumed, value)
+      | bytesConsumed == fromIntegral (BS.length bytes) -> Right value
+      | True -> Left "bytes are not all consumed"
     Left (_, _, message) -> Left $ T.pack message

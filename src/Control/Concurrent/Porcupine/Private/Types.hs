@@ -57,6 +57,7 @@ module Control.Concurrent.Porcupine.Private.Types
    fromSockAddr',
    GroupId (..),
    Message (..),
+   LocalMessage (..),
    SourceId (..),
    DestId (..),
    Event (..),
@@ -112,10 +113,10 @@ newtype Process a = Process (StateT ProcessInfo IO a)
   deriving (Functor, Applicative, Monad, MonadIO)
 
 -- | The entry point type
-type Entry = SourceId -> Header -> Payload -> Process ()
+type Entry = Message -> Process ()
 
 -- | The message handler type
-type Handler a = SourceId -> DestId -> Header -> Payload -> Maybe (Process a)
+type Handler a = Message -> Maybe (Process a)
 
 -- | The header type
 type Header = ByteString
@@ -132,8 +133,8 @@ type Key = ByteString
 -- | The process information type
 data ProcessInfo =
   ProcessInfo { procId :: !ProcessId,
-                procQueue :: !(TQueue Message),
-                procExtra :: !(TVar (Seq Message)),
+                procQueue :: !(TQueue LocalMessage),
+                procExtra :: !(TVar (Seq LocalMessage)),
                 procNode :: !Node }
 
 -- | The local node information type
@@ -445,46 +446,68 @@ instance Binary GroupId where
 instance Hashable GroupId
 
 -- | The message type
-data Message = UserMessage { umsgSourceId :: !SourceId,
-                             umsgDestId :: !DestId,
-                             umsgHeader :: !Header,
-                             umsgPayload :: !Payload }
-             | SpawnMessage { spawnSourceId :: !SourceId,
-                              spawnEntry :: !Entry,
-                              spawnProcessId :: !ProcessId,
-                              spawnHeader :: !Header,
-                              spawnPayload :: !Payload,
-                              spawnEndListeners :: !(Seq DestId) }
-             | QuitMessage { quitProcessId :: !ProcessId,
-                             quitHeader :: !Header,
-                             quitPayload :: !Payload }
-             | EndMessage { endProcessId :: !ProcessId,
-                            endException :: !(Maybe SomeException) }
-             | KillMessage { killProcessId :: !ProcessId,
-                             killDestId :: !DestId,
-                             killHeader :: !Header,
-                             killPayload :: !Payload }
-             | SubscribeMessage { subProcessId :: !ProcessId,
-                                  subGroupId :: !GroupId }
-             | UnsubscribeMessage { usubProcessId :: !ProcessId,
-                                    usubGroupId :: !GroupId }
-             | AssignMessage { assName :: !Name,
-                               assDestId :: !DestId }
-             | UnassignMessage { uassName :: !Name,
-                                 uassDestId :: !DestId }
-             | ShutdownMessage { shutProcessId :: !ProcessId,
-                                 shutNodeId :: !NodeId,
-                                 shutHeader :: !Header,
-                                 shutPayload :: !Payload }
-             | ConnectMessage { connNode :: !Node }
-             | ConnectRemoteMessage { conrNodeId :: !PartialNodeId }
-             | ListenEndMessage { lendListenedId :: !DestId,
-                                  lendListenerId :: !DestId }
-             | UnlistenEndMessage { ulendListenedId :: !DestId,
-                                    ulendListenerId :: !DestId }
-             | HelloMessage { heloNode :: !Node }
-             | JoinMessage { joinNode :: !Node }
+data Message = Message { msgSourceId :: !SourceId,
+                         msgDestId :: !DestId,
+                         msgHeader :: !Header,
+                         msgPayload :: !Payload }
+               deriving (Eq, Ord, Generic)
 
+-- | The message type Binary instance
+instance Binary Message where
+  put Message{..} = do
+    put msgSourceId
+    put msgDestId
+    put msgHeader
+    put msgPayload
+  get = do
+    sourceId <- get
+    destId <- get
+    header <- get
+    payload <- get
+    return $ Message { msgSourceId = sourceId,
+                       msgDestId = destId,
+                       msgHeader = header,
+                       msgPayload = payload }
+
+-- | The message type Hashable instance
+instance Hashable Message
+
+-- | The message type
+data LocalMessage = UserMessage { umsgMessage :: !Message }
+                  | SpawnMessage { spawnMessage :: !Message,
+                                   spawnEntry :: !Entry,
+                                   spawnProcessId :: !ProcessId,
+                                   spawnEndListeners :: !(Seq DestId) }
+                  | QuitMessage { quitProcessId :: !ProcessId,
+                                  quitHeader :: !Header,
+                                  quitPayload :: !Payload }
+                  | EndMessage { endProcessId :: !ProcessId,
+                                 endException :: !(Maybe SomeException) }
+                  | KillMessage { killProcessId :: !ProcessId,
+                                  killDestId :: !DestId,
+                                  killHeader :: !Header,
+                                  killPayload :: !Payload }
+                  | SubscribeMessage { subProcessId :: !ProcessId,
+                                       subGroupId :: !GroupId }
+                  | UnsubscribeMessage { usubProcessId :: !ProcessId,
+                                         usubGroupId :: !GroupId }
+                  | AssignMessage { assName :: !Name,
+                                    assDestId :: !DestId }
+                  | UnassignMessage { uassName :: !Name,
+                                      uassDestId :: !DestId }
+                  | ShutdownMessage { shutProcessId :: !ProcessId,
+                                      shutNodeId :: !NodeId,
+                                      shutHeader :: !Header,
+                                      shutPayload :: !Payload }
+                  | ConnectMessage { connNode :: !Node }
+                  | ConnectRemoteMessage { conrNodeId :: !PartialNodeId }
+                  | ListenEndMessage { lendListenedId :: !DestId,
+                                       lendListenerId :: !DestId }
+                  | UnlistenEndMessage { ulendListenedId :: !DestId,
+                                         ulendListenerId :: !DestId }
+                  | HelloMessage { heloNode :: !Node }
+                  | JoinMessage { joinNode :: !Node }
+             
 -- | The message source type
 data SourceId = NoSource
               | NormalSource ProcessId
@@ -553,13 +576,10 @@ data Event = RemoteConnected { rconNodeId :: !NodeId,
            | RemoteReceived { recvNodeId :: !NodeId,
                               recvMessage :: !RemoteMessage }
            | RemoteDisconnected { dconNodeId :: !NodeId }
-           | LocalReceived { lrcvMessage :: !Message }
+           | LocalReceived { lrcvMessage :: !LocalMessage }
 
 -- | The remote message type
-data RemoteMessage = RemoteUserMessage { rumsgSourceId :: !SourceId,
-                                         rumsgDestId :: !DestId,
-                                         rumsgHeader :: !Header,
-                                         rumsgPayload :: !Payload }
+data RemoteMessage = RemoteUserMessage { rumsgMessage :: !Message }
                    | RemoteEndMessage { rendSourceId :: !SourceId,
                                         rendHeader :: !Header,
                                         rendPayload :: !Payload }
@@ -592,10 +612,7 @@ data RemoteMessage = RemoteUserMessage { rumsgSourceId :: !SourceId,
 instance Binary RemoteMessage where
   put RemoteUserMessage{..} = do
     put (0 :: Word8)
-    put rumsgSourceId
-    put rumsgDestId
-    put rumsgHeader
-    put rumsgPayload
+    put rumsgMessage
   put RemoteEndMessage{..} = do
     put (1 :: Word8)
     put rendSourceId
@@ -649,14 +666,8 @@ instance Binary RemoteMessage where
     select <- get :: Get Word8
     case select of
       0 -> do
-        sourceId <- get
-        destId <- get
-        header <- get
-        payload <- get
-        return $ RemoteUserMessage { rumsgSourceId = sourceId,
-                                     rumsgDestId = destId,
-                                     rumsgHeader = header,
-                                     rumsgPayload = payload }
+        message <- get
+        return $ RemoteUserMessage { rumsgMessage = message }
       1 -> do
         sourceId <- get
         header <- get

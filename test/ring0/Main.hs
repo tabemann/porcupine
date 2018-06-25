@@ -63,24 +63,39 @@ import System.IO (hSetBuffering,
                   stdout,
                   stderr)
 
+-- | The other process header.
+otherProcessHeader :: P.Header
+otherProcessHeader = U.encode ("otherProcess" :: T.Text)
+
+-- | Message text header
+textHeader :: P.Header
+textHeader = U.encode ("text" :: T.Text)
+
 -- | The ring repeater process.
 ringRepeater :: Int -> P.Process ()
 ringRepeater count = do
   liftIO $ putStrLn "Getting process Id..."
-  pid <- P.receive [\_ _ header payload ->
-                      if header == U.encode ("otherProcess" :: T.Text)
-                      then Just $ return $ (U.decode payload :: P.ProcessId)
-                      else Nothing]
+  pid <- P.receive
+    [\msg ->
+        if U.matchHeader msg otherProcessHeader
+        then case U.tryDecodeMessage msg :: Either T.Text P.ProcessId of
+               Right pid -> Just $ return pid
+               Left errorText -> error $ T.unpack errorText
+        else Nothing]
   liftIO $ putStrLn "Starting to receive messages..."
   loop pid count
   where loop pid count = do
-          P.receive [\_ _ header payload ->
-                        if header == U.encode ("textMessage" :: T.Text)
-                        then Just $ do
-                          liftIO $ printf "Got text: %s\n"
-                            (U.decode payload :: T.Text)
-                          P.send (P.ProcessDest pid) header payload
-                        else Nothing]
+          P.receive
+            [\msg ->
+                if U.matchHeader msg textHeader
+                then case U.tryDecodeMessage msg :: Either T.Text T.Text of
+                       Right text ->
+                         Just $ do
+                           liftIO $ printf "Got text: %s\n" text
+                           U.reply msg textHeader $
+                             P.messagePayload msg
+                       Left errorText -> error $ T.unpack errorText
+                else Nothing]
           if count > 1
             then loop pid $ count - 1
             else do nid <- P.myNodeId
@@ -95,30 +110,27 @@ ringSender address pid count = do
   liftIO . printf "Listening for process %s termination...\n" $ show pid
   P.listenEnd $ P.ProcessDest pid
   myPid <- P.myProcessId
-  let header = U.encode ("otherProcess" :: T.Text)
-      payload = U.encode myPid
-  P.send (P.ProcessDest pid) header payload
+  P.send (P.ProcessDest pid) otherProcessHeader $ U.encode myPid
   forM ([0..count - 1] :: [Int]) $ \i -> do
-    let header = U.encode ("textMessage" :: T.Text)
-        payload = U.encode . T.pack $ printf "%d" i
-    P.send (P.ProcessDest pid) header payload
+    P.send (P.ProcessDest pid) textHeader . U.encode . T.pack $ printf "%d" i
     liftIO $ printf "Sent: %d\n" i
   loop
   where loop = do
-          P.receive [\_ _ header payload ->
-                        if header == U.encode ("textMessage" :: T.Text)
-                        then Just $ do
-                          liftIO $ printf "Got text back: %s\n"
-                            (U.decode payload :: T.Text)
-                        else if U.isEnd header
-                        then Just $ do
-                          liftIO $ putStrLn "Received end"
-                          nid <- P.myNodeId
-                          P.shutdown' nid
-                          P.quit'
-                        else Just $ do
-                          liftIO $ printf "Got message: %s\n"
-                            (U.decode header :: T.Text)]
+          P.receive
+            [\msg ->
+                if U.matchHeader msg textHeader
+                then case U.tryDecodeMessage msg :: Either T.Text T.Text of
+                       Right text ->
+                         Just $ do
+                           liftIO $ printf "Got text back: %s\n" text
+                       Left errorText -> error $ T.unpack errorText
+                else if U.isEnd msg
+                then Just $ do
+                  liftIO $ putStrLn "Received end"
+                  nid <- P.myNodeId
+                  P.shutdown' nid
+                  P.quit'
+                else Just $ return ()]
           loop
 
 -- | A ring messaging test.

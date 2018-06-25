@@ -72,11 +72,10 @@ instance Show GenericServer where
 data Handler a = Handler (Match a) (Action a)
 
 -- | Generic server handler match type
-type Match a = a -> P.SourceId -> P.DestId -> P.Header -> P.Payload -> Bool
+type Match a = a -> P.Message -> Bool
 
 -- | Generic server handler action type
-type Action a = a -> P.SourceId -> P.DestId -> P.Header -> P.Payload ->
-                P.Process a
+type Action a = a -> P.Message -> P.Process a
 
 -- | Whether to quit on detecting process end
 data QuitOnEnd = QuitOnEnd | QuitOnFail | NotQuitOnEnd
@@ -156,19 +155,18 @@ run state = do
           NotQuitOnEnd -> [doExit]
   stState <- P.receive $ handlers >< (handleCase <$> stHandlers state)
   run $ state { stState = stState }
-  where onNormalEndDoQuit _ _ header _
-          | U.isNormalEnd header = Just $ quit state
+  where onNormalEndDoQuit msg
+          | U.isNormalEnd msg = Just $ quit state
           | True = Nothing
-        onFailDoQuit _ _ header _
-          | U.isFail header = Just $ quit state
+        onFailDoQuit msg
+          | U.isFail msg = Just $ quit state
           | True = Nothing
-        doExit _ _ header _
-          | header == genericServerExitHeader = Just $ quit state
+        doExit msg
+          | U.matchHeader msg genericServerExitHeader = Just $ quit state
           | True = Nothing
-        handleCase (Handler match action) sid did header payload =
-          if match (stState state) sid did header payload
-          then Just $ action (stState state) sid did header payload
-          else Nothing
+        handleCase (Handler match action) msg
+          | match (stState state) msg = Just $ action (stState state) msg
+          | True = Nothing
 
 -- | Quit the generic server.
 quit :: State a -> P.Process a

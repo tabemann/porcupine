@@ -180,14 +180,14 @@ runNode = do
       logMessage "Actually shutting down\n"
 
 -- | Handle a local message.
-handleLocalMessage :: Message -> NodeM ()
+handleLocalMessage :: LocalMessage -> NodeM ()
 handleLocalMessage UserMessage{..} = do
   logMessage $ printf "GOT UserMessage\n"
-  handleLocalUserMessage umsgSourceId umsgDestId umsgHeader umsgPayload
+  handleLocalUserMessage umsgMessage
 handleLocalMessage SpawnMessage{..} = do
   logMessage $ printf "GOT SpawnMessage\n"
-  handleLocalSpawnMessage spawnSourceId spawnEntry spawnProcessId spawnHeader
-    spawnPayload spawnEndListeners
+  handleLocalSpawnMessage spawnMessage spawnEntry spawnProcessId
+    spawnEndListeners
 handleLocalMessage QuitMessage{..} = do
   logMessage $ printf "GOT QuitMessage FROM %s\n" $ show quitProcessId
   handleLocalQuitMessage quitProcessId quitHeader quitPayload
@@ -250,10 +250,8 @@ handleEvent LocalReceived{..} = do
 -- | Handle a remote message.
 handleRemoteMessage :: NodeId -> RemoteMessage -> NodeM ()
 handleRemoteMessage nodeId RemoteUserMessage{..} = do
-  logMessage $ printf "GOT RemoteUserMessage FROM %s WITH %s\n" (show nodeId)
-    (decode rumsgHeader :: T.Text)
-  handleRemoteUserMessage nodeId rumsgSourceId rumsgDestId rumsgHeader
-    rumsgPayload
+  logMessage $ printf "GOT RemoteUserMessage FROM %s\n" (show nodeId)
+  handleRemoteUserMessage nodeId rumsgMessage
 handleRemoteMessage nodeId RemoteEndMessage{..} = do
   logMessage . printf "GOT RemoteEndMessage FROM %s" $ show nodeId
   handleRemoteEndMessage nodeId rendSourceId rendHeader rendPayload
@@ -338,7 +336,7 @@ handleRemoteConnectFailed pnid = do
     if prnodeId pnode == pnid
     then do
       forM_ (prnodeEndListeners pnode) $ \(did, _) ->
-        sendLocalUserMessage did NoSource header payload
+        sendLocalUserMessage $ Message NoSource did header payload
     else return ()
   St.modify $ \state ->
     state { nodePendingRemoteNodes =
@@ -356,21 +354,19 @@ handleRemoteDisconnected nid = do
       logMessage $ printf "Found remote node for end\n"
       forM_ (rnodeEndListeners rnode) $ \(did, _) -> do
         logMessage . printf "Sending end message to %s\n" $ show did
-        sendLocalUserMessage did NoSource header payload
+        sendLocalUserMessage $ Message NoSource did header payload
       St.modify $ \state ->
         state { nodeRemoteNodes = M.delete nid $ nodeRemoteNodes state }
     Nothing -> return ()
 
 -- | Handle a local user message.
-handleLocalUserMessage :: SourceId -> DestId -> Header -> Payload -> NodeM ()
-handleLocalUserMessage sourceId destId header payload = do
-  sendLocalUserMessage destId sourceId header payload
+handleLocalUserMessage :: Message -> NodeM ()
+handleLocalUserMessage message = sendLocalUserMessage message
 
 -- | Handle a local spawn message.
-handleLocalSpawnMessage :: SourceId -> Entry -> ProcessId -> Header ->
-                           Payload -> S.Seq DestId -> NodeM ()
-handleLocalSpawnMessage sourceId entry processId header payload
-  endListeners = do
+handleLocalSpawnMessage :: Message -> Entry -> ProcessId -> S.Seq DestId ->
+                           NodeM ()
+handleLocalSpawnMessage message entry processId endListeners = do
   state <- St.get
   queue <- liftIO $ atomically newTQueue
   extra <- liftIO . atomically $ newTVar S.empty
@@ -380,10 +376,9 @@ handleLocalSpawnMessage sourceId entry processId header payload
                                   procNode = nodeInfo state }
   asyncThread <- liftIO . async $ do
     maybeException <-
-      catch (do St.evalStateT (do let Process action =
-                                        entry sourceId header payload
-                                    in do action
-                                          return ())
+      catch (do St.evalStateT (do let Process action = entry message
+                                  action
+                                  return ())
                   processInfo
                 return Nothing) $
             (\e -> return $ Just (e :: SomeException))
@@ -589,10 +584,9 @@ handleLocalJoinMessage node = do
     Just _ -> return ()
 
 -- | Handle a remote user message.
-handleRemoteUserMessage :: NodeId -> SourceId -> DestId -> Header -> Payload ->
-                           NodeM ()
-handleRemoteUserMessage nid sourceId destId header payload = do
-  handleIncomingUserMessage destId sourceId header payload
+handleRemoteUserMessage :: NodeId -> Message -> NodeM ()
+handleRemoteUserMessage nid msg = do
+  handleIncomingUserMessage msg
 
 -- | Handle a remote process end message.
 handleRemoteEndMessage :: NodeId -> SourceId -> Header -> Payload ->
@@ -734,26 +728,20 @@ handleRemoteLeaveMessage :: NodeId -> NodeM ()
 handleRemoteLeaveMessage nid = return ()
 
 -- | Send a user message to a process.
-sendLocalUserMessage :: DestId -> SourceId -> Header -> Payload -> NodeM ()
-sendLocalUserMessage destId sourceId header payload = do
+sendLocalUserMessage :: Message -> NodeM ()
+sendLocalUserMessage message = do
   state <- St.get
-  case destId of
+  case msgDestId message of
     ProcessDest pid ->
       if pidNodeId pid == nodeId (nodeInfo state)
       then case M.lookup pid $ nodeProcesses state of
              Just process -> do
                liftIO . atomically $ do
                  writeTQueue (procQueue $ pstateInfo process) $
-                   UserMessage { umsgSourceId = sourceId,
-                                 umsgDestId = destId,
-                                 umsgHeader = header,
-                                 umsgPayload = payload }
+                   UserMessage { umsgMessage = message }
              Nothing -> return ()
       else do sendRemoteMessage (pidNodeId pid) $
-                RemoteUserMessage { rumsgSourceId = sourceId,
-                                    rumsgDestId = destId,
-                                    rumsgHeader = header,
-                                    rumsgPayload = payload }
+                RemoteUserMessage { rumsgMessage = message }
     GroupDest gid ->
       case M.lookup gid $ nodeGroups state of
         Just group -> do
@@ -762,33 +750,24 @@ sendLocalUserMessage destId sourceId header payload = do
               Just process -> do
                 liftIO . atomically $ do
                   writeTQueue (procQueue $ pstateInfo process) $
-                    UserMessage { umsgSourceId = sourceId,
-                                  umsgDestId = destId,
-                                  umsgHeader = header,
-                                  umsgPayload = payload }
+                    UserMessage { umsgMessage = message }
               Nothing -> return ()
           forM_ (groupRemoteSubscribers group) $ \(nid, _) -> do
             sendRemoteMessage nid $
-              RemoteUserMessage { rumsgSourceId = sourceId,
-                                  rumsgDestId = destId,
-                                  rumsgHeader = header,
-                                  rumsgPayload = payload }
+              RemoteUserMessage { rumsgMessage = message }
 
 -- | Send incoming user message to destination processes.
-handleIncomingUserMessage :: DestId -> SourceId -> Header -> Payload -> NodeM ()
-handleIncomingUserMessage destId sourceId header payload = do
+handleIncomingUserMessage :: Message -> NodeM ()
+handleIncomingUserMessage message = do
   state <- St.get
-  case destId of
+  case msgDestId message of
     ProcessDest pid ->
       if pidNodeId pid == nodeId (nodeInfo state)
       then case M.lookup pid $ nodeProcesses state of
              Just process -> do
                liftIO . atomically $ do
                  writeTQueue (procQueue $ pstateInfo process) $
-                   UserMessage { umsgSourceId = sourceId,
-                                 umsgDestId = destId,
-                                 umsgHeader = header,
-                                 umsgPayload = payload }
+                   UserMessage { umsgMessage = message }
              Nothing -> return ()
       else return ()
     GroupDest gid ->
@@ -799,14 +778,11 @@ handleIncomingUserMessage destId sourceId header payload = do
               Just process -> do
                 liftIO . atomically $ do
                   writeTQueue (procQueue $ pstateInfo process) $
-                    UserMessage { umsgSourceId = sourceId,
-                                  umsgDestId = destId,
-                                  umsgHeader = header,
-                                  umsgPayload = payload }
+                    UserMessage { umsgMessage = message }
               Nothing -> return ()
 
--- | Send a locall message.
-sendLocalMessage :: Node -> Message -> NodeM ()
+-- | Send a local message.
+sendLocalMessage :: Node -> LocalMessage -> NodeM ()
 sendLocalMessage node message = do
   liftIO . atomically . writeTQueue (nodeQueue node) $
     LocalReceived { lrcvMessage = message }
@@ -911,14 +887,14 @@ sendEndMessageForProcess process message = do
                           causeCauseId = causeId }
           Nothing -> NormalSource pid
   forM_ (pstateEndListeners process) $ \(did, _) ->
-    sendLocalUserMessage did sourceId header payload
+    sendLocalUserMessage $ Message sourceId did header payload
   groups <- M.elems . nodeGroups <$> St.get
   forM_ groups $ \group -> do
     case S.findIndexL (\(pid', _) -> pid == pid') $
          groupLocalSubscribers group of
       Just _ -> do
         forM_ (groupEndListeners group) $ \(did, _) ->
-          sendLocalUserMessage did sourceId header payload
+          sendLocalUserMessage $ Message sourceId did header payload
       Nothing -> return ()
 
 -- | Kill a process.

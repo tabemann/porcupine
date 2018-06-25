@@ -63,20 +63,29 @@ import System.IO (hSetBuffering,
                   stdout,
                   stderr)
 
+-- | Message text header
+textHeader :: P.Header
+textHeader = U.encode ("text" :: T.Text)
+
+-- | Normal quit header
+normalQuitHeader :: P.Header
+normalQuitHeader = U.encode ("normalQuit" :: T.Text)
+
 -- | A simple message receiver.
 simpleMessageReceiver :: Integer -> Bool -> P.Process ()
 simpleMessageReceiver index shutdownOnQuit = do
   liftIO $ putStrLn "Starting to receive messages..."
   loop
   where loop = do
-          P.receive [\sid did header payload ->
-                       if header == U.encode ("messageText" :: T.Text)
-                       then do
-                         Just . liftIO $ printf "Received %s for %d\n"
-                           (U.decode payload :: T.Text) index
+          P.receive [\msg ->
+                       if U.matchHeader msg textHeader
+                       then case U.tryDecodeMessage msg of
+                              Right text ->
+                                Just . liftIO $ printf "Received %s for %d\n"
+                                (text :: T.Text) index
                        else Nothing,
-                     \sid did header payload ->
-                       if header == U.encode ("normalQuit" :: T.Text)
+                     \msg ->
+                       if U.matchHeader msg normalQuitHeader
                        then Just $ do
                          liftIO $ putStrLn "Exiting receive process..."
                          if shutdownOnQuit
@@ -102,14 +111,13 @@ simpleMessageSender pid0 pid1 address = do
   liftIO $ putStrLn "Starting to send messages..."
   forM_ ([1..100] :: S.Seq Integer) $ \n -> do
     liftIO . putStrLn . T.pack $ printf "Sending %d" n
-    P.send (P.GroupDest gid) (U.encode ("messageText" :: T.Text))
-      (U.encode . T.pack $ printf "%d" n)
+    P.send (P.GroupDest gid) textHeader (U.encode . T.pack $ printf "%d" n)
   liftIO $ putStrLn "Sending message requesting quit..."
-  P.send (P.GroupDest gid) (U.encode ("normalQuit" :: T.Text)) BS.empty
+  P.send (P.GroupDest gid) normalQuitHeader BS.empty
   liftIO $ putStrLn "Waiting for termination..."
   replicateM 2 $ do
-    P.receive [\sid did header payload ->
-                 if U.isEnd header
+    P.receive [\msg ->
+                 if U.isEnd msg
                  then Just . liftIO $ putStrLn "Received end"
                  else Nothing]
   liftIO $ putStrLn "Shutting down..."

@@ -63,6 +63,14 @@ import System.IO (hSetBuffering,
                   stdout,
                   stderr)
 
+-- | Message text header
+textHeader :: P.Header
+textHeader = U.encode ("text" :: T.Text)
+
+-- | Exit header
+exitHeader :: P.Header
+exitHeader = U.encode ("exit" :: T.Text)
+
 -- | Another ring repeater.
 ringRepeater :: T.Text -> T.Text -> P.Process ()
 ringRepeater myName nextName = do
@@ -73,22 +81,22 @@ ringRepeater myName nextName = do
   did <- P.lookup $ U.encode nextName
   handleIncoming did
   where handleIncoming did = do
-          P.receive [\_ _ header payload ->
-                       if header == U.encode ("textMessage" :: T.Text)
-                       then Just $ do
-                         liftIO $ printf "Got text: %s\n"
-                           (U.decode payload :: T.Text)
-                         P.send did header payload
-                       else if header == U.encode ("exit" :: T.Text)
+          P.receive [\msg ->
+                       if U.matchHeader msg textHeader
+                       then case U.tryDecodeMessage msg of
+                              Right text ->
+                                Just $ do
+                                  liftIO $ printf "Got text: %s\n"
+                                    (text :: T.Text)
+                                  P.send did (P.messageHeader msg)
+                                    (P.messagePayload msg)
+                              Left errorText -> error $ T.unpack errorText
+                       else if U.matchHeader msg exitHeader
                        then Just $ do
                          liftIO $ printf "Got exit\n"
-                         let header = U.encode ("exit" :: T.Text)
-                             payload = BS.empty
-                         P.send did header payload
+                         P.send did exitHeader BS.empty
                          P.quit'
-                       else Just $ do
-                         liftIO $ printf "Got message: %s\n"
-                           (U.decode header :: T.Text)]
+                       else Just $ return ()]
           handleIncoming did
 
 -- | Another ring sender.
@@ -111,11 +119,11 @@ ringSender myName names addresses count = do
   case S.viewl dids of
     nextDid :< _ -> do
       forM_ ([0..count - 1] :: S.Seq Int) $ \i -> do
-        let header = U.encode ("textMessage" :: T.Text)
+        let header = textHeader
             payload = U.encode . T.pack $ printf "%d" i
         P.send nextDid header payload
         liftIO $ printf "Sent %d\n" i
-      let header = U.encode ("exit" :: T.Text)
+      let header = exitHeader
           payload = BS.empty
       P.send nextDid header payload
       liftIO $ printf "Sent exit\n"
@@ -127,19 +135,22 @@ ringSender myName names addresses count = do
     EmptyL -> liftIO $ printf "Unexpected empty did list\n"
   where handleIncoming dids nids = do
           dids' <-
-            P.receive [\sid _ header payload ->
-                         if header == U.encode ("textMessage" :: T.Text)
-                         then Just $ do
-                           liftIO $ printf "Got text back: %s\n"
-                             (U.decode payload :: T.Text)
-                           return dids
-                         else if header == U.encode ("exit" :: T.Text)
+            P.receive [\msg ->
+                         if U.matchHeader msg textHeader
+                         then case U.tryDecodeMessage msg of
+                                Right text ->
+                                  Just $ do
+                                    liftIO $ printf "Got text back: %s\n"
+                                      (text :: T.Text)
+                                    return dids
+                                Left errorText -> error $ T.unpack errorText
+                         else if U.matchHeader msg exitHeader
                          then Just $ do
                            liftIO $ printf "Got exit back\n"
                            return dids
-                         else if U.isEnd header
+                         else if U.isEnd msg
                          then Just $ do
-                           case U.processIdOfSourceId sid of
+                           case U.processIdOfMessage msg of
                              Just pid -> do
                                liftIO . printf "Got quit for %s\n" $ show pid
                                let dids' =
@@ -154,10 +165,7 @@ ringSender myName names addresses count = do
                                  else return ()
                                return dids'
                              Nothing -> return dids
-                         else Just $ do
-                           liftIO $ printf "Got message: %s\n"
-                             (U.decode header :: T.Text)
-                           return dids]
+                         else Just $ return dids]
           handleIncoming dids' nids
 
 -- | Another ring messaging test.

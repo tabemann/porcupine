@@ -34,6 +34,7 @@
 module Control.Concurrent.Porcupine.Process
 
   (Process,
+   Message,
    Handler,
    Entry,
    Header,
@@ -52,6 +53,10 @@ module Control.Concurrent.Porcupine.Process
    myProcessId,
    myNodeId,
    nodeIdOfProcessId,
+   messageSourceId,
+   messageDestId,
+   messageHeader,
+   messagePayload,
    spawnInit,
    spawnInit',
    spawn,
@@ -142,16 +147,34 @@ myNodeId = Process $ nodeId . procNode <$> St.get
 nodeIdOfProcessId :: ProcessId -> NodeId
 nodeIdOfProcessId = pidNodeId
 
+-- | Get source Id of a message.
+messageSourceId :: Message -> SourceId
+messageSourceId = msgSourceId
+
+-- | Get destination Id of a message.
+messageDestId :: Message -> DestId
+messageDestId = msgDestId
+
+-- | Get header of a message.
+messageHeader :: Message -> Header
+messageHeader = msgHeader
+
+-- | Get payload of a message.
+messagePayload :: Message -> Payload
+messagePayload = msgPayload
+
 -- | Spawn a process on the local node without a preexisting process.
 spawnInit :: Entry -> Node -> Header -> Payload -> IO ProcessId
 spawnInit entry node header payload = do
   spawnedPid <- newProcessIdForNode node
   let message =
-        SpawnMessage { spawnSourceId = NoSource,
+        SpawnMessage { spawnMessage =
+                         Message { msgSourceId = NoSource,
+                                   msgDestId = ProcessDest spawnedPid,
+                                   msgHeader = header,
+                                   msgPayload = payload },
                        spawnEntry = entry,
                        spawnProcessId = spawnedPid,
-                       spawnHeader = header,
-                       spawnPayload = payload,
                        spawnEndListeners = S.empty } 
   atomically . writeTQueue (nodeQueue node) $
     LocalReceived { lrcvMessage = message }
@@ -161,42 +184,46 @@ spawnInit entry node header payload = do
 -- instantiation parameters (because they are normally only needed for remote
 -- spawns).
 spawnInit' :: Process () -> Node -> IO ProcessId
-spawnInit' action node = spawnInit (\_ _ _ -> action) node BS.empty BS.empty
+spawnInit' action node = spawnInit (\_ -> action) node BS.empty BS.empty
 
 -- | Spawn a process on the local node normally.
 spawn :: Entry -> Header -> Payload -> Process ProcessId
 spawn entry header payload = do
   pid <- myProcessId
   spawnedPid <- newProcessId
-  sendRaw $ SpawnMessage { spawnSourceId = NormalSource pid,
+  sendRaw $ SpawnMessage { spawnMessage =
+                             Message { msgSourceId = NormalSource pid,
+                                       msgDestId = ProcessDest spawnedPid,
+                                       msgHeader = header,
+                                       msgPayload = payload },
                            spawnEntry = entry,
                            spawnProcessId = spawnedPid,
-                           spawnHeader = header,
-                           spawnPayload = payload,
                            spawnEndListeners = S.empty }
   return spawnedPid
 
 -- | Spawn a process on the local node normally without instantiation parameters
 -- (because they are normally only needed for remote spawns).
 spawn' :: Process () -> Process ProcessId
-spawn' action = spawn (\_ _ _ -> action) BS.empty BS.empty
+spawn' action = spawn (\_ -> action) BS.empty BS.empty
 
 -- | Spawn a process on the local node normally for another process.
 spawnAsProxy :: Entry -> ProcessId -> Header -> Payload -> Process ()
 spawnAsProxy entry pid header payload = do
   spawnedPid <- newProcessId
-  sendRaw $ SpawnMessage { spawnSourceId = NormalSource pid,
+  sendRaw $ SpawnMessage { spawnMessage =
+                             Message { msgSourceId = NormalSource pid,
+                                       msgDestId = ProcessDest spawnedPid,
+                                       msgHeader = header,
+                                       msgPayload = payload },
                            spawnEntry = entry,
                            spawnProcessId = spawnedPid,
-                           spawnHeader = header,
-                           spawnPayload = payload,
                            spawnEndListeners = S.empty } 
 
 -- | Spawn a process on the local node normally for another process without
 -- instantiation parameters (because they are normally only needed for remote
 -- spawns).
 spawnAsProxy' :: Process () -> ProcessId -> Process ()
-spawnAsProxy' action pid = spawnAsProxy (\_ _ _ -> action) pid BS.empty BS.empty
+spawnAsProxy' action pid = spawnAsProxy (\_ -> action) pid BS.empty BS.empty
 
 -- | Spawn a process on the local node normally and atomically listen for end.
 spawnListenEnd :: Entry -> Header -> Payload -> S.Seq DestId ->
@@ -204,11 +231,13 @@ spawnListenEnd :: Entry -> Header -> Payload -> S.Seq DestId ->
 spawnListenEnd entry header payload endListeners = do
   pid <- myProcessId
   spawnedPid <- newProcessId
-  sendRaw $ SpawnMessage { spawnSourceId = NormalSource pid,
+  sendRaw $ SpawnMessage { spawnMessage =
+                             Message { msgSourceId = NormalSource pid,
+                                       msgDestId = ProcessDest spawnedPid,
+                                       msgHeader = header,
+                                       msgPayload = payload },
                            spawnEntry = entry,
                            spawnProcessId = spawnedPid,
-                           spawnHeader = header,
-                           spawnPayload = payload,
                            spawnEndListeners = endListeners }
   return spawnedPid
 
@@ -217,7 +246,7 @@ spawnListenEnd entry header payload endListeners = do
 -- listen for end.
 spawnListenEnd' :: Process () -> S.Seq DestId -> Process ProcessId
 spawnListenEnd' action endListeners =
-  spawnListenEnd (\_ _ _ -> action) BS.empty BS.empty endListeners
+  spawnListenEnd (\_ -> action) BS.empty BS.empty endListeners
 
 -- | Spawn a process on the local node normally for another process and
 -- atomically listen for end.
@@ -225,11 +254,13 @@ spawnListenEndAsProxy :: Entry -> ProcessId -> Header -> Payload ->
                          S.Seq DestId -> Process ()
 spawnListenEndAsProxy entry pid header payload endListeners = do
   spawnedPid <- newProcessId
-  sendRaw $ SpawnMessage { spawnSourceId = NormalSource pid,
+  sendRaw $ SpawnMessage { spawnMessage =
+                             Message { msgSourceId = NormalSource pid,
+                                       msgDestId = ProcessDest spawnedPid,
+                                       msgHeader = header,
+                                       msgPayload = payload },
                            spawnEntry = entry,
                            spawnProcessId = spawnedPid,
-                           spawnHeader = header,
-                           spawnPayload = payload,
                            spawnEndListeners = endListeners } 
 
 -- | Spawn a process on the local node normally for another process without
@@ -237,24 +268,26 @@ spawnListenEndAsProxy entry pid header payload endListeners = do
 -- spawns) and atomically listen for End.
 spawnListenEndAsProxy' :: Process () -> ProcessId -> S.Seq DestId -> Process ()
 spawnListenEndAsProxy' action pid endListeners =
-  spawnListenEndAsProxy (\_ _ _ -> action) pid BS.empty BS.empty endListeners
+  spawnListenEndAsProxy (\_ -> action) pid BS.empty BS.empty endListeners
 
 -- | Send a message to a process or group.
 send :: DestId -> Header -> Payload -> Process ()
 send did header payload = do
   pid <- myProcessId
-  sendRaw $ UserMessage { umsgSourceId = NormalSource pid,
-                          umsgDestId = did,
-                          umsgHeader = header,
-                          umsgPayload = payload }
+  sendRaw $ UserMessage { umsgMessage =
+                            Message { msgSourceId = NormalSource pid,
+                                      msgDestId = did,
+                                      msgHeader = header,
+                                      msgPayload = payload } }
   
 -- | Send a message to a process or group for another process.
 sendAsProxy :: DestId -> SourceId -> Header -> Payload -> Process ()
 sendAsProxy did sid header payload = do
-  sendRaw $ UserMessage { umsgSourceId = sid,
-                          umsgDestId = did,
-                          umsgHeader = header,
-                          umsgPayload = payload }
+  sendRaw $ UserMessage { umsgMessage =
+                            Message { msgSourceId = sid,
+                                      msgDestId = did,
+                                      msgHeader = header,
+                                      msgPayload = payload } }
 
 -- | Quit the current process.
 quit :: Header -> Payload -> Process ()
@@ -540,7 +573,7 @@ handleJust :: E.Exception e => (e -> Maybe b) -> (b -> Process a) ->
 handleJust pred handler action = catchJust pred action handler
 
 -- | Do the basic work of sending a message.
-sendRaw :: Message -> Process ()
+sendRaw :: LocalMessage -> Process ()
 sendRaw message = do
   node <- Process $ procNode <$> St.get
   liftIO . atomically . writeTQueue (nodeQueue node) $
@@ -591,7 +624,7 @@ tryReceive options = do
 
 -- | Attempt to match a list of already-received messages agianst a set of
 -- options, and if one is found, execute the action.
-matchAndExecutePrefound :: S.Seq (Handler a) -> S.Seq Message ->
+matchAndExecutePrefound :: S.Seq (Handler a) -> S.Seq LocalMessage ->
                            Process (Maybe a)
 matchAndExecutePrefound options messages = matchAndExecutePrefound' messages 0
   where matchAndExecutePrefound' alreadyReceived index =
@@ -608,13 +641,13 @@ matchAndExecutePrefound options messages = matchAndExecutePrefound' messages 0
             EmptyL -> return Nothing
 
 -- | Match a message against a set of options
-match :: S.Seq (Handler a) -> Message -> Maybe (Process a)
+match :: S.Seq (Handler a) -> LocalMessage -> Maybe (Process a)
 match options message =
   case message of
     UserMessage {..} ->
       case S.viewl options of
         handler :< rest ->
-          case handler umsgSourceId umsgDestId umsgHeader umsgPayload of
+          case handler umsgMessage of
             action@(Just _) -> action
             Nothing -> match rest message
         EmptyL -> Nothing

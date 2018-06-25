@@ -303,30 +303,25 @@ portUnlistenEnd listenedId (SocketPort pid) =
   P.unlistenEndAsProxy listenedId $ P.ProcessDest pid
 
 -- | Get whether a socket port has ended.
-isEnd :: SocketPort -> P.SourceId -> P.Header -> Bool
-isEnd (SocketPort pid) sid header =
-  U.isEnd header && U.processIdOfSourceId sid == Just pid
+isEnd :: SocketPort -> P.Message -> Bool
+isEnd (SocketPort pid) msg = U.isEndForProcessId msg pid
 
 -- | Get whether a socket port has ended normally.
-isNormalEnd :: SocketPort -> P.SourceId -> P.Header -> Bool
-isNormalEnd (SocketPort pid) sid header =
-  U.isNormalEnd header && U.processIdOfSourceId sid == Just pid
+isNormalEnd :: SocketPort -> P.Message -> Bool
+isNormalEnd (SocketPort pid) msg = U.isNormalEndForProcessId msg pid
 
 -- | Get whether a socket port has failed.
-isFail :: SocketPort -> P.SourceId -> P.Header -> Bool
-isFail (SocketPort pid) sid header =
-  U.isFail header && U.processIdOfSourceId sid == Just pid
+isFail :: SocketPort -> P.Message -> Bool
+isFail (SocketPort pid) msg = U.isFailForProcessId msg pid
 
 -- | Get whether a socket port has been accepted, and if it has, return the
 -- socket port.
-accept :: SocketListener -> P.SourceId -> P.Header -> P.Payload ->
-          Maybe SocketPort
-accept (SocketListener listenerPid) sid header payload
-  | header == acceptedHeader
-    && U.processIdOfSourceId sid == Just listenerPid =
-      case U.tryDecode payload :: Either T.Text P.ProcessId of
-        Right pid -> Just $ SocketPort pid
-        Left _ -> Nothing
+accept :: SocketListener -> P.Message -> Maybe SocketPort
+accept (SocketListener listenerPid) msg
+  | U.matchHeaderAndProcessId msg acceptedHeader listenerPid =
+    case U.tryDecodeMessage msg :: Either T.Text P.ProcessId of
+      Right pid -> Just $ SocketPort pid
+      Left _ -> Nothing
   | True = Nothing
 
 -- | Look up a socket listener.
@@ -380,19 +375,16 @@ listenerUnlistenEndAsProxy (SocketListener pid) did =
   P.unlistenEndAsProxy (P.ProcessDest pid) did
 
 -- | Get whether a socket listener has ended.
-listenerIsEnd :: SocketListener -> P.SourceId -> P.Header -> Bool
-listenerIsEnd (SocketListener pid) sid header =
-  U.isEnd header && U.processIdOfSourceId sid == Just pid
+listenerIsEnd :: SocketListener -> P.Message -> Bool
+listenerIsEnd (SocketListener pid) msg = U.isEndForProcessId msg pid
 
 -- | Get whether a socket listener has ended normally.
-listenerIsNormalEnd :: SocketListener -> P.SourceId -> P.Header -> Bool
-listenerIsNormalEnd (SocketListener pid) sid header =
-  U.isNormalEnd header && U.processIdOfSourceId sid == Just pid
+listenerIsNormalEnd :: SocketListener -> P.Message -> Bool
+listenerIsNormalEnd (SocketListener pid) msg = U.isNormalEndForProcessId msg pid
 
 -- | Get whether a socket listener has failed.
-listenerIsFail :: SocketListener -> P.SourceId -> P.Header -> Bool
-listenerIsFail (SocketListener pid) sid header =
-  U.isFail header && U.processIdOfSourceId sid == Just pid
+listenerIsFail :: SocketListener -> P.Message -> Bool
+listenerIsFail (SocketListener pid) msg = U.isFailForProcessId msg pid
 
 -- | Start a listener.
 startListener :: NS.SockAddr -> P.Key -> S.Seq P.DestId -> S.Seq P.DestId ->
@@ -430,14 +422,13 @@ runListenProcess parentPid socket key = do
   logMessage "Got incoming socket\n"
   P.send (P.ProcessDest parentPid) autoSetupRequestHeader BS.empty
   logMessage "Sent auto setup request to parent process\n"
-  response <- P.receive [\sid _ header payload ->
-                           if U.processIdOfSourceId sid == Just parentPid
-                              && header == autoSetupResponseHeader
-                           then
-                             case U.tryDecode payload of
-                               Right response -> Just $ return response
-                               Left _ -> Nothing
-                           else Nothing]
+  response <- P.receive
+    [\msg ->
+        if U.matchHeaderAndProcessId msg autoSetupResponseHeader parentPid
+        then case U.tryDecodeMessage msg of
+               Right response -> Just $ return response
+               Left _ -> Nothing
+        else Nothing]
   logMessage "Got auto setup response from parent process\n"
   childPid <- P.spawnListenEnd' (startSocketPort socket' key
                                  (asrAutoRegister response))
@@ -459,12 +450,11 @@ runParentListener state = do
   runParentListener state
 
 -- | Handle listener registration.
-handleListenerRegister :: SocketListenerState -> P.SourceId -> P.DestId ->
-                          P.Header -> P.Payload ->
+handleListenerRegister :: SocketListenerState -> P.Message ->
                           Maybe (P.Process SocketListenerState)
-handleListenerRegister state _ _ header payload
-  | header == socketListenerRegisterHeader =
-    case U.tryDecode payload :: Either T.Text P.DestId of
+handleListenerRegister state msg
+  | U.matchHeader msg socketListenerRegisterHeader =
+    case U.tryDecodeMessage msg :: Either T.Text P.DestId of
       Right did ->
         case M.lookup did $ slsRegistered state of
           Just count ->
@@ -477,12 +467,11 @@ handleListenerRegister state _ _ header payload
   | True = Nothing
 
 -- | Handle listener unregistration.
-handleListenerUnregister :: SocketListenerState -> P.SourceId -> P.DestId ->
-                            P.Header -> P.Payload ->
+handleListenerUnregister :: SocketListenerState -> P.Message ->
                             Maybe (P.Process SocketListenerState)
-handleListenerUnregister state _ _ header payload
-  | header == socketListenerUnregisterHeader =
-    case U.tryDecode payload :: Either T.Text P.DestId of
+handleListenerUnregister state msg
+  | U.matchHeader msg socketListenerUnregisterHeader =
+    case U.tryDecodeMessage msg :: Either T.Text P.DestId of
       Right did ->
         case M.lookup did $ slsRegistered state of
           Just 1 ->
@@ -496,24 +485,22 @@ handleListenerUnregister state _ _ header payload
   | True = Nothing
 
 -- | Handle add auto registration.
-handleAddAutoRegister :: SocketListenerState -> P.SourceId -> P.DestId ->
-                         P.Header -> P.Payload ->
+handleAddAutoRegister :: SocketListenerState -> P.Message ->
                          Maybe (P.Process SocketListenerState)
-handleAddAutoRegister state _ _ header payload
-  | header == addAutoRegisterHeader =
-    case U.tryDecode payload :: Either T.Text P.DestId of
+handleAddAutoRegister state msg
+  | U.matchHeader msg addAutoRegisterHeader =
+    case U.tryDecodeMessage msg :: Either T.Text P.DestId of
       Right did ->
         Just . return $ state { slsAutoRegister = slsAutoRegister state |> did }
       Left _ -> Just $ return state
   | True = Nothing
 
 -- | Handle remove auto registration.
-handleRemoveAutoRegister :: SocketListenerState -> P.SourceId -> P.DestId ->
-                            P.Header -> P.Payload ->
+handleRemoveAutoRegister :: SocketListenerState -> P.Message ->
                             Maybe (P.Process SocketListenerState)
-handleRemoveAutoRegister state _ _ header payload
-  | header == removeAutoRegisterHeader =
-    case U.tryDecode payload :: Either T.Text P.DestId of
+handleRemoveAutoRegister state msg
+  | U.matchHeader msg removeAutoRegisterHeader =
+    case U.tryDecodeMessage msg :: Either T.Text P.DestId of
       Right did ->
         case S.findIndexL (== did) $ slsAutoRegister state of
           Just index ->
@@ -524,12 +511,11 @@ handleRemoveAutoRegister state _ _ header payload
   | True = Nothing
 
 -- | Handle add an auto end listener.
-handleAddAutoEndListener :: SocketListenerState -> P.SourceId -> P.DestId ->
-                            P.Header -> P.Payload ->
+handleAddAutoEndListener :: SocketListenerState -> P.Message ->
                             Maybe (P.Process SocketListenerState)
-handleAddAutoEndListener state _ _ header payload
-  | header == addAutoEndListenerHeader =
-    case U.tryDecode payload :: Either T.Text P.DestId of
+handleAddAutoEndListener state msg
+  | U.matchHeader msg addAutoEndListenerHeader =
+    case U.tryDecodeMessage msg :: Either T.Text P.DestId of
       Right did ->
         Just . return $ state { slsAutoEndListeners =
                                   slsAutoEndListeners state |> did }
@@ -537,12 +523,11 @@ handleAddAutoEndListener state _ _ header payload
   | True = Nothing
 
 -- | Handle remove an auto end listener.
-handleRemoveAutoEndListener :: SocketListenerState -> P.SourceId -> P.DestId ->
-                               P.Header -> P.Payload ->
+handleRemoveAutoEndListener :: SocketListenerState -> P.Message ->
                                Maybe (P.Process SocketListenerState)
-handleRemoveAutoEndListener state _ _ header payload
-  | header == removeAutoEndListenerHeader =
-    case U.tryDecode payload :: Either T.Text P.DestId of
+handleRemoveAutoEndListener state msg
+  | U.matchHeader msg removeAutoEndListenerHeader =
+    case U.tryDecodeMessage msg :: Either T.Text P.DestId of
       Right did ->
         case S.findIndexL (== did) $ slsAutoEndListeners state of
           Just index ->
@@ -554,36 +539,32 @@ handleRemoveAutoEndListener state _ _ header payload
   | True = Nothing
 
 -- | Handle an auto setup request.
-handleAutoSetupRequest :: SocketListenerState -> P.SourceId -> P.DestId ->
-                          P.Header -> P.Payload ->
+handleAutoSetupRequest :: SocketListenerState -> P.Message ->
                           Maybe (P.Process SocketListenerState)
-handleAutoSetupRequest state sid _ header payload
-  | header == autoSetupRequestHeader
-    && U.processIdOfSourceId sid == (Just $ slsListenPid state) =
-      Just $ do
-        let response = AutoSetupResponse { asrAutoRegister =
-                                             slsAutoRegister state,
-                                           asrAutoEndListeners =
-                                             slsAutoEndListeners state }
-        P.send (P.ProcessDest $ slsListenPid state) autoSetupResponseHeader $
-          U.encode response
-        logMessage "Sent auto setup response to listen process\n"
-        return state
+handleAutoSetupRequest state msg
+  | U.matchHeaderAndProcessId msg autoSetupRequestHeader $ slsListenPid state =
+    Just $ do
+      let response = AutoSetupResponse { asrAutoRegister =
+                                           slsAutoRegister state,
+                                         asrAutoEndListeners =
+                                           slsAutoEndListeners state }
+      U.reply msg autoSetupResponseHeader $ U.encode response
+      logMessage "Sent auto setup response to listen process\n"
+      return state
   | True = Nothing
 
 -- | Handle an accepted connection.
-handleAccepted :: SocketListenerState -> P.SourceId -> P.DestId ->
-                  P.Header -> P.Payload -> Maybe (P.Process SocketListenerState)
-handleAccepted state sid _ header payload
-  | header == acceptedHeader
-    && U.processIdOfSourceId sid == (Just $ slsListenPid state) =
-      case U.tryDecode payload :: Either T.Text P.ProcessId of
-        Right _ ->
-          Just $ do
-            forM_ (M.keys $ slsRegistered state) $ \did ->
-              P.send did acceptedHeader payload
-            return state
-        Left _ -> Just $ return state
+handleAccepted :: SocketListenerState -> P.Message ->
+                  Maybe (P.Process SocketListenerState)
+handleAccepted state msg
+  | U.matchHeaderAndProcessId msg acceptedHeader $ slsListenPid state =
+    case U.tryDecodeMessage msg :: Either T.Text P.ProcessId of
+      Right _ ->
+        Just $ do
+          forM_ (M.keys $ slsRegistered state) $ \did ->
+            P.send did acceptedHeader $ P.messagePayload msg
+          return state
+      Left _ -> Just $ return state
   | True = Nothing
 
 -- | Start a socket port without an existing connection.
@@ -624,89 +605,85 @@ runSocketPort state = do
   runSocketPort state
 
 -- | Handle send process end
-handleSendEnd :: SocketPortState -> P.SourceId -> P.DestId -> P.Header ->
-                 P.Payload -> Maybe (P.Process SocketPortState)
-handleSendEnd state sid _ header _
-  | U.processIdOfSourceId sid == (Just $ spsSendPid state)
-    && U.isEnd header =
-      Just $ do P.quit'
-                return state
+handleSendEnd :: SocketPortState -> P.Message ->
+                 Maybe (P.Process SocketPortState)
+handleSendEnd state msg
+  | U.isEndForProcessId msg $ spsSendPid state = Just $ P.quit' >> return state
   | True = Nothing
 
 -- | Handle receive process end
-handleReceiveEnd :: SocketPortState -> P.SourceId -> P.DestId -> P.Header ->
-                    P.Payload -> Maybe (P.Process SocketPortState)
-handleReceiveEnd state sid _ header _
-  | U.processIdOfSourceId sid == (Just $ spsReceivePid state)
-    && U.isEnd header =
-      Just $ do P.quit'
-                return state
+handleReceiveEnd :: SocketPortState -> P.Message ->
+                    Maybe (P.Process SocketPortState)
+handleReceiveEnd state msg
+  | U.isEndForProcessId msg $ spsReceivePid state =
+    Just $ P.quit' >> return state
   | True = Nothing
 
 -- | Handle socket port registration
-handleRegister :: SocketPortState -> P.SourceId -> P.DestId -> P.Header ->
-                  P.Payload -> Maybe (P.Process SocketPortState)
-handleRegister state _ _ header payload
-  | header == socketPortRegisterHeader =
-      Just $ do
-        case U.tryDecode payload of
-          Right did ->
-            case M.lookup did $ spsRegistered state of
-              Nothing ->
-                return $ state { spsRegistered =
-                                   M.insert did 1 $ spsRegistered state }
-              Just _ -> do
-                return $
-                  state { spsRegistered =
-                            M.adjust (+1) did $ spsRegistered state }
-          Left _ -> return state
+handleRegister :: SocketPortState -> P.Message ->
+                  Maybe (P.Process SocketPortState)
+handleRegister state msg
+  | U.matchHeader msg socketPortRegisterHeader =
+    Just $ do
+      case U.tryDecodeMessage msg of
+        Right did ->
+          case M.lookup did $ spsRegistered state of
+            Nothing ->
+              return $ state { spsRegistered =
+                                 M.insert did 1 $ spsRegistered state }
+            Just _ -> do
+              return $
+                state { spsRegistered =
+                          M.adjust (+1) did $ spsRegistered state }
+        Left _ -> return state
   | True = Nothing
 
 -- | Handle socket port unregistration
-handleUnregister :: SocketPortState -> P.SourceId -> P.DestId -> P.Header ->
-                    P.Payload -> Maybe (P.Process SocketPortState)
-handleUnregister state _ _ header payload
-  | header == socketPortUnregisterHeader =
-      Just $ do
-        case U.tryDecode payload of
-          Right did ->
-            case M.lookup did $ spsRegistered state of
-              Just 1 -> do
-                return $ state { spsRegistered =
+handleUnregister :: SocketPortState -> P.Message ->
+                    Maybe (P.Process SocketPortState)
+handleUnregister state msg
+  | U.matchHeader msg socketPortUnregisterHeader =
+    Just $ do
+      case U.tryDecodeMessage msg of
+        Right did ->
+          case M.lookup did $ spsRegistered state of
+            Just 1 -> do
+              return $ state { spsRegistered =
                                  M.delete did $ spsRegistered state}
-              Just _ -> do
-                return $
-                  state { spsRegistered =
-                            M.adjust (subtract 1) did $ spsRegistered state }
-              Nothing -> return state
-          Left _ -> return state
+            Just _ -> do
+              return $
+                state { spsRegistered =
+                          M.adjust (subtract 1) did $ spsRegistered state }
+            Nothing -> return state
+        Left _ -> return state
   | True = Nothing
 
 -- | Handle incoming messages
-handleIncoming :: SocketPortState -> P.SourceId -> P.DestId -> P.Header ->
-                  P.Payload -> Maybe (P.Process SocketPortState)
-handleIncoming state sid _ header payload
-  | U.processIdOfSourceId sid == (Just $ spsReceivePid state)
-    && header == receiveRemoteHeader =
-      Just $ do
-        case U.tryDecode payload of
-          Right container -> do
-            forM_ (M.keys $ spsRegistered state) $ \did -> do
-              P.send did (P.mcontHeader container) (P.mcontPayload container)
-            return state
-          Left _ -> return state
+handleIncoming :: SocketPortState -> P.Message ->
+                  Maybe (P.Process SocketPortState)
+handleIncoming state msg
+  | U.matchHeaderAndProcessId msg receiveRemoteHeader $ spsReceivePid state =
+    Just $ do
+      case U.tryDecodeMessage msg of
+        Right container -> do
+          forM_ (M.keys $ spsRegistered state) $ \did -> do
+            P.send did (P.mcontHeader container) (P.mcontPayload container)
+          return state
+        Left _ -> return state
   | True = Nothing
 
 -- | Handle outgoing messages
-handleOutgoing :: SocketPortState -> P.SourceId -> P.DestId -> P.Header ->
-                  P.Payload -> Maybe (P.Process SocketPortState)
-handleOutgoing state sid _ header payload
-  | U.processIdOfSourceId sid /= (Just $ spsSendPid state)
-    && U.processIdOfSourceId sid /= (Just $ spsReceivePid state) =
+handleOutgoing :: SocketPortState -> P.Message ->
+                  Maybe (P.Process SocketPortState)
+handleOutgoing state msg
+  | U.excludeProcessId msg (spsSendPid state)
+    && U.excludeProcessId msg (spsReceivePid state) =
       Just $ do
         if not $ spsSendStopped state
           then do
-            let payload' = U.encode $ P.MessageContainer header payload
+            let payload' =
+                  U.encode $ P.MessageContainer (P.messageHeader msg)
+                  (P.messagePayload msg)
             P.send (P.ProcessDest $ spsSendPid state) sendRemoteHeader
               payload'
           else return ()
@@ -731,21 +708,20 @@ runSendProcess parentPid socket = do
   runSendProcess parentPid socket
 
 -- | Handle send remote message
-handleSendRemote :: P.ProcessId -> NS.Socket -> P.SourceId -> P.DestId ->
-                    P.Header -> P.Payload -> Maybe (P.Process ())
-handleSendRemote parentPid socket sid _ header payload
-  | U.processIdOfSourceId sid == Just parentPid
-    && header == sendRemoteHeader =
-      Just $ do
-        case U.tryDecode payload of
-          Right container -> do
-            let bytes = U.encode (container :: P.MessageContainer)
-                lengthField =
-                  U.encode (fromIntegral $ BS.length bytes :: Word64)
-                bytes' = lengthField <> bytes
-            P.handle (\e -> const P.quit' (e :: IOException))
-              (liftIO $ NSB.sendAll socket bytes')
-          Left _ -> return ()
+handleSendRemote :: P.ProcessId -> NS.Socket -> P.Message ->
+                    Maybe (P.Process ())
+handleSendRemote parentPid socket msg
+  | U.matchHeaderAndProcessId msg sendRemoteHeader parentPid =
+    Just $ do
+      case U.tryDecodeMessage msg of
+        Right container -> do
+          let bytes = U.encode (container :: P.MessageContainer)
+              lengthField =
+                U.encode (fromIntegral $ BS.length bytes :: Word64)
+              bytes' = lengthField <> bytes
+          P.handle (\e -> const P.quit' (e :: IOException))
+            (liftIO $ NSB.sendAll socket bytes')
+        Left _ -> return ()
   | True = Nothing
 
 -- | Start receive process

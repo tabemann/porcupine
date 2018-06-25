@@ -70,6 +70,10 @@ data ReceiverState = ReceiverState { recvPortEndCount :: Integer,
                                      recvListener :: SP.SocketListener,
                                      recvIncoming :: S.Seq SP.SocketPort }
 
+-- | Message text header
+textHeader :: P.Header
+textHeader = U.encode ("text" :: T.Text)
+
 -- | A socket port receiver
 receiver :: NS.SockAddr -> Integer -> P.Process ()
 receiver sockAddr count = do
@@ -84,7 +88,7 @@ receiver sockAddr count = do
                                  recvIncoming = S.empty }
   where receiverLoop state = do
           state <- P.receive [handleAccepted state,
-                              handleTextMessage state,
+                              handleText state,
                               handlePortEnd state,
                               handleListenerEnd state]
           if recvPortEndCount state >= count || recvListenerEnded state
@@ -94,33 +98,35 @@ receiver sockAddr count = do
               P.shutdown' myNid
               P.quit'
             else receiverLoop state
-        handleAccepted state sid _ header payload =
-          case SP.accept (recvListener state) sid header payload of
+        handleAccepted state msg =
+          case SP.accept (recvListener state) msg of
             Just port ->
               Just $ do
                 liftIO $ printf "Accepted incoming port: %s\n" $ show port
                 return $ state { recvIncoming = recvIncoming state |> port }
             Nothing -> Nothing
-        handleTextMessage state sid _ header payload
-          | header == U.encode ("textMessage" :: T.Text) =
-            case U.tryDecode payload :: Either T.Text T.Text of
+        handleText state msg
+          | U.matchHeader msg textHeader =
+            case U.tryDecodeMessage msg :: Either T.Text T.Text of
               Right text ->
                 Just $ do
-                  liftIO $ printf "Got message from %s: %s\n" (show sid) text
+                  liftIO $ printf "Got message from %s: %s\n"
+                    (show $ P.messageSourceId msg) text
                   return state
               Left _ -> Just $ return state
           | True = Nothing
-        handlePortEnd state sid _ header _
-          | any (\port -> SP.isEnd port sid header) $ recvIncoming state = do
-              Just $ do
-                liftIO $ printf "Got port end from %s\n" $ show sid
-                return $ state { recvPortEndCount = recvPortEndCount state + 1 }
+        handlePortEnd state msg
+          | any (\port -> SP.isEnd port msg) $ recvIncoming state =
+            Just $ do
+              liftIO $ printf "Got port end from %s\n" .
+                show $ P.messageSourceId msg
+              return $ state { recvPortEndCount = recvPortEndCount state + 1 }
           | True = Nothing
-        handleListenerEnd state sid _ header _
-          | SP.listenerIsEnd (recvListener state) sid header = do
-              Just $ do
-                liftIO $ printf "Listener ended\n"
-                return $ state { recvListenerEnded = True }
+        handleListenerEnd state msg
+          | SP.listenerIsEnd (recvListener state) msg =
+            Just $ do
+              liftIO $ printf "Listener ended\n"
+              return $ state { recvListenerEnded = True }
           | True = Nothing
 
 -- | Open a socket port and send messages to it
@@ -133,8 +139,7 @@ sender sockAddr count = do
     [P.ProcessDest monitorPid]
   liftIO $ printf "Socket port has been started...\n"
   forM_ ([0..count - 1] :: [Integer]) $ \index -> do
-    SP.send port (U.encode ("textMessage" :: T.Text))
-      (U.encode . T.pack $ printf "%d" index)
+    SP.send port textHeader . U.encode . T.pack $ printf "%d" index
     liftIO $ printf "Sending: %d\n" index
   liftIO $ printf "Shutting down socket port...\n"
   SP.disconnect port
@@ -146,11 +151,12 @@ sender sockAddr count = do
 -- | Monitor for process exit
 monitor :: P.Process ()
 monitor =
-  P.receive [\sid _ header _ ->
-                if U.isEnd header
-                then Just $ do
-                  liftIO . printf "Process exited: %s" $ show sid
-                else Nothing]
+  P.receive [\msg ->
+               if U.isEnd msg
+               then Just $ do
+                 liftIO . printf "Process exited: %s" .
+                   show $ P.messageSourceId msg
+               else Nothing]
 
 -- | A socket port ring messaging test.
 portMessagingTest :: IO ()

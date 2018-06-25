@@ -64,6 +64,14 @@ import System.IO (hSetBuffering,
                   stdout,
                   stderr)
 
+-- | Exit header
+exitHeader :: P.Header
+exitHeader = U.encode ("exit" :: T.Text)
+
+-- | Text header
+textHeader :: P.Header
+textHeader = U.encode ("text" :: T.Text)
+
 -- | Repeat incoming messages.
 repeater :: NS.SockAddr -> P.Process ()
 repeater sockAddr = do
@@ -83,61 +91,46 @@ repeaterLoop listener = do
   repeaterLoop listener
 
 -- | Handle repeater accepted message.
-handleAccepted :: SP.SocketListener -> P.SourceId -> P.DestId -> P.Header ->
-                  P.Payload -> Maybe (P.Process ())
-handleAccepted listener sid _ header payload =
-  case SP.accept listener sid header payload of
+handleAccepted :: SP.SocketListener -> P.Message -> Maybe (P.Process ())
+handleAccepted listener msg =
+  case SP.accept listener msg of
     Just port ->
       Just . liftIO . printf "Accepted socket port for %s\n" $ show port
     Nothing -> Nothing
 
 -- | Handle end messages for repeaters.
-handleRepeaterEnd :: P.SourceId -> P.DestId -> P.Header -> P.Payload ->
-                     Maybe (P.Process ())
-handleRepeaterEnd sid _ header payload
-  | U.isEnd header =
+handleRepeaterEnd :: P.Message -> Maybe (P.Process ())
+handleRepeaterEnd msg
+  | U.isEnd msg =
     Just $ do
-      liftIO . printf "Received end for %s\n" $ show sid
-      liftIO . printf "Shutting down for %s\n" $ show sid
-      case U.processIdOfSourceId sid of
-        Just pid -> P.send (P.ProcessDest pid) (U.encode ("exit" :: T.Text))
-                    BS.empty
-        Nothing -> return ()
-      myNid <- P.myNodeId
-      P.shutdown' myNid
+      liftIO . printf "Received end for %s\n" . show $ P.messageSourceId msg
+      liftIO . printf "Shutting down for %s\n" . show $ P.messageSourceId msg
+      P.shutdown' =<< P.myNodeId
       P.quit'
   | True = Nothing
 
 -- | Handle text messages for repeaters.
-handleRepeaterTextMessage :: P.SourceId -> P.DestId -> P.Header -> P.Payload ->
-                             Maybe (P.Process ())
-handleRepeaterTextMessage sid _ header payload
-  | header == U.encode ("textMessage" :: T.Text) =
-    case U.tryDecode payload :: Either T.Text T.Text of
+handleRepeaterTextMessage :: P.Message -> Maybe (P.Process ())
+handleRepeaterTextMessage msg
+  | U.matchHeader msg textHeader =
+    case U.tryDecodeMessage msg :: Either T.Text T.Text of
       Right text ->
         Just $ do
-          liftIO $ printf "Received text for %s: %s\n" (show sid) text
-          case U.processIdOfSourceId sid of
-            Just pid -> P.send (P.ProcessDest pid)
-                        (U.encode ("textMessage" :: T.Text)) (U.encode text)
-            Nothing -> return ()
+          liftIO $ printf "Received text for %s: %s\n"
+            (show $ P.messageSourceId msg) text
+          U.reply msg textHeader $ U.encode text
       Left _ -> Just $ return ()
   | True = Nothing
 
 -- | Handle exit message for repeaters.
-handleRepeaterExit :: P.SourceId -> P.DestId -> P.Header -> P.Payload ->
-                      Maybe (P.Process ())
-handleRepeaterExit sid _ header _
-  | header == U.encode ("exit" :: T.Text) =
+handleRepeaterExit :: P.Message -> Maybe (P.Process ())
+handleRepeaterExit msg
+  | U.matchHeader msg exitHeader =
     Just $ do
-      liftIO . printf "Shutting down for %s\n" $ show sid
-      case U.processIdOfSourceId sid of
-        Just pid -> P.send (P.ProcessDest pid) (U.encode ("exit" :: T.Text))
-                    BS.empty
-        Nothing -> return ()
+      liftIO . printf "Shutting down for %s\n" . show $ P.messageSourceId msg
+      U.reply msg exitHeader BS.empty
       liftIO $ threadDelay 100000
-      myNid <- P.myNodeId
-      P.shutdown' myNid
+      P.shutdown' =<< P.myNodeId
       P.quit'
   | True = Nothing
 
@@ -161,39 +154,35 @@ receiver = do
   receiver
 
 -- | Handle end messages for receivers.
-handleReceiverEnd :: P.SourceId -> P.DestId -> P.Header -> P.Payload ->
-                     Maybe (P.Process ())
-handleReceiverEnd sid _ header payload
-  | U.isEnd header =
+handleReceiverEnd :: P.Message -> Maybe (P.Process ())
+handleReceiverEnd msg
+  | U.isEnd msg =
     Just $ do
-      liftIO . printf "Received end for %s\n" $ show sid
-      liftIO . printf "Shutting down for %s\n" $ show sid
-      myNid <- P.myNodeId
-      P.shutdown' myNid
+      liftIO . printf "Received end for %s\n" . show $ P.messageSourceId msg
+      liftIO . printf "Shutting down for %s\n" . show $ P.messageSourceId msg
+      P.shutdown' =<< P.myNodeId
       P.quit'
   | True = Nothing
 
 -- | Handle text messages for receivers.
-handleReceiverTextMessage :: P.SourceId -> P.DestId -> P.Header -> P.Payload ->
-                             Maybe (P.Process ())
-handleReceiverTextMessage sid _ header payload
-  | header == U.encode ("textMessage" :: T.Text) =
-    case U.tryDecode payload :: Either T.Text T.Text of
+handleReceiverTextMessage :: P.Message -> Maybe (P.Process ())
+handleReceiverTextMessage msg
+  | U.matchHeader msg textHeader =
+    case U.tryDecodeMessage msg :: Either T.Text T.Text of
       Right text ->
         Just $ do
-          liftIO $ printf "Received text back for %s: %s\n" (show sid) text
+          liftIO $ printf "Received text back for %s: %s\n"
+            (show $ P.messageSourceId msg) text
       Left _ -> Just $ return ()
   | True = Nothing
 
 -- | Handle exit message for receivers.
-handleReceiverExit :: P.SourceId -> P.DestId -> P.Header -> P.Payload ->
-                      Maybe (P.Process ())
-handleReceiverExit sid _ header _
-  | header == U.encode ("exit" :: T.Text) =
+handleReceiverExit :: P.Message -> Maybe (P.Process ())
+handleReceiverExit msg
+  | U.matchHeader msg exitHeader =
     Just $ do
-      liftIO . printf "Shutting down for %s\n" $ show sid
-      myNid <- P.myNodeId
-      P.shutdown' myNid
+      liftIO . printf "Shutting down for %s\n" . show $ P.messageSourceId msg
+      P.shutdown' =<< P.myNodeId
       P.quit'
   | True = Nothing
 

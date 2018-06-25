@@ -33,9 +33,21 @@
 
 module Control.Concurrent.Porcupine.Utility
 
-  (isEnd,
+  (matchHeader,
+   matchProcessId,
+   matchHeaderAndProcessId,
+   excludeHeader,
+   excludeProcessId,
+   excludeHeaderAndProcessId,
+   isEnd,
    isNormalEnd,
    isFail,
+   isEndForProcessId,
+   isNormalEndForProcessId,
+   isFailForProcessId,
+   tryDecodeMessage,
+   processIdOfMessage,
+   reply,
    nodeIdOfSourceId,
    nodeIdOfDestId,
    processIdOfSourceId,
@@ -82,21 +94,84 @@ remoteConnectFailedHeader = encode ("remoteConnectFailed" :: T.Text)
 remoteDisconnectedHeader :: P.Header
 remoteDisconnectedHeader = encode ("remoteDisconnected" :: T.Text)
 
--- | Get whether a header indicates end.
-isEnd :: P.Header -> Bool
-isEnd header = isNormalEnd header || isFail header
+-- | Match a message header.
+matchHeader :: P.Message -> P.Header -> Bool
+matchHeader message header = P.messageHeader message == header
 
--- | Get whether a header indicates normal end.
-isNormalEnd :: P.Header -> Bool
-isNormalEnd header = header == quitHeader ||
-                     header == endedHeader ||
-                     header == killedHeader
+-- | Match a message source process Id.
+matchProcessId :: P.Message -> P.ProcessId -> Bool
+matchProcessId message pid =
+  processIdOfSourceId (P.messageSourceId message) == Just pid
+
+-- | Match a message header and source process Id.
+matchHeaderAndProcessId :: P.Message -> P.Header -> P.ProcessId -> Bool
+matchHeaderAndProcessId message header pid =
+  matchHeader message header && matchProcessId message pid
+
+-- | Exclude a message header.
+excludeHeader :: P.Message -> P.Header -> Bool
+excludeHeader message header = P.messageHeader message /= header
+
+-- | Exclude a message source process Id.
+excludeProcessId :: P.Message -> P.ProcessId -> Bool
+excludeProcessId message pid =
+  processIdOfSourceId (P.messageSourceId message) /= Just pid
+
+-- | Exclude a message header and source process Id.
+excludeHeaderAndProcessId :: P.Message -> P.Header -> P.ProcessId -> Bool
+excludeHeaderAndProcessId message header pid =
+  excludeHeader message header && excludeProcessId message pid
+
+-- | Get whether a message indicates end.
+isEnd :: P.Message -> Bool
+isEnd message = isNormalEnd message || isFail message
+
+-- | Get whether a message indicates normal end.
+isNormalEnd :: P.Message -> Bool
+isNormalEnd message = matchHeader message quitHeader ||
+                      matchHeader message endedHeader ||
+                      matchHeader message killedHeader
 
 -- | Get whether a hehader indicates a failure.
-isFail :: P.Header -> Bool
-isFail header = header == diedHeader ||
-                header == remoteConnectFailedHeader ||
-                header == remoteDisconnectedHeader
+isFail :: P.Message -> Bool
+isFail message = matchHeader message diedHeader ||
+                 matchHeader message remoteConnectFailedHeader ||
+                 matchHeader message remoteDisconnectedHeader
+
+-- | Get whether a message indicates end for a particular process Id.
+isEndForProcessId :: P.Message -> P.ProcessId -> Bool
+isEndForProcessId message pid = (isNormalEnd message || isFail message) &&
+                                matchProcessId message pid
+
+-- | Get whether a message indicates normal end for a particular process Id.
+isNormalEndForProcessId :: P.Message -> P.ProcessId -> Bool
+isNormalEndForProcessId message pid = (matchHeader message quitHeader ||
+                                       matchHeader message endedHeader ||
+                                       matchHeader message killedHeader) &&
+                                      matchProcessId message pid
+
+-- | Get whether a hehader indicates a failure for a particular process Id.
+isFailForProcessId :: P.Message -> P.ProcessId -> Bool
+isFailForProcessId message pid = (matchHeader message diedHeader ||
+                                  matchHeader message
+                                   remoteConnectFailedHeader ||
+                                  matchHeader message
+                                   remoteDisconnectedHeader) &&
+                                 matchProcessId message pid
+
+-- | Try to decode a message payload.
+tryDecodeMessage :: B.Binary a => P.Message -> Either T.Text a
+tryDecodeMessage = tryDecode . P.messagePayload
+
+-- | Get the process Id of a message.
+processIdOfMessage = processIdOfSourceId . P.messageSourceId
+
+-- | Reply to a message.
+reply :: P.Message -> P.Header -> P.Payload -> P.Process ()
+reply msg header payload =
+  case processIdOfMessage msg of
+    Just pid -> P.send (P.ProcessDest pid) header payload
+    Nothing -> return ()
 
 -- | Get node Id of destination Id
 nodeIdOfDestId :: P.DestId -> Maybe P.NodeId

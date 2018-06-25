@@ -142,8 +142,7 @@ sendReceive sockAddr count = do
   port <- SP.connect sockAddr BS.empty [P.ProcessDest receiverPid]
           [P.ProcessDest receiverPid]
   forM ([0..count - 1] :: [Integer]) $ \i -> do
-    SP.send port (U.encode ("textMessage" :: T.Text)) $
-      U.encode . T.pack $ printf "%d" i
+    SP.send port textHeader . U.encode . T.pack $ printf "%d" i
     liftIO $ printf "Sending: %d\n" i
   SP.send port (U.encode ("exit" :: T.Text)) BS.empty
 

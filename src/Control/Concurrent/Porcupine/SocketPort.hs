@@ -169,7 +169,7 @@ magicValue = 0xF000BAA4
 
 -- | Do log or not
 logActive :: Bool
-logActive = True
+logActive = False
 
 -- | Log a message.
 logMessage :: MonadIO a => String -> a ()

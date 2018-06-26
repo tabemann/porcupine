@@ -105,6 +105,7 @@ import Control.Exception.Base (SomeException,
                                catch,
                                throw)
 import Control.Concurrent.Porcupine.Process (Key)
+import Data.Hashable (Hashable(..))
 import Data.Word (Word32,
                   Word64)
 import Data.Functor ((<$>))
@@ -116,7 +117,7 @@ import Debug.Trace (trace)
 
 -- | Socket port type
 newtype SocketPort = SocketPort P.ProcessId
-                   deriving (Eq, Ord, B.Binary)
+                   deriving (Eq, Ord, B.Binary, Hashable)
 
 -- | Socket port type Show instance
 instance Show SocketPort where
@@ -124,7 +125,7 @@ instance Show SocketPort where
 
 -- | Socket listener type
 newtype SocketListener = SocketListener P.ProcessId
-                       deriving (Eq, Ord, B.Binary)
+                       deriving (Eq, Ord, B.Binary, Hashable)
 
 -- | Socket listener type Show instance
 instance Show SocketListener where

@@ -56,6 +56,7 @@ module Control.Concurrent.Porcupine.Private.Types
    toSockAddr',
    fromSockAddr',
    GroupId (..),
+   UniqueId (..),
    Message (..),
    LocalMessage (..),
    SourceId (..),
@@ -196,7 +197,7 @@ data ProcessId =
               pidNodeId :: !NodeId }
   deriving (Eq, Ord, Generic)
 
--- | THe process Id Show instance
+-- | The process Id Show instance
 instance Show ProcessId where
   show pid = printf "pid:%d;%d@%s" (pidSequenceNum pid) (pidRandomNum pid)
              (show $ pidNodeId pid)
@@ -213,8 +214,35 @@ instance Binary ProcessId where
                                 pidRandomNum = randomNum,
                                 pidNodeId = nid }
 
--- | The process Id Hashble instance
+-- | The process Id Hashable instance
 instance Hashable ProcessId
+
+-- | The unique Id type
+data UniqueId =
+  UniqueId { uidSequenceNum :: !Integer,
+             uidRandomNum :: !Integer,
+             uidNodeId :: !NodeId }
+  deriving (Eq, Ord, Generic)
+
+-- | The unique Id Show instance
+instance Show UniqueId where
+  show uid = printf "uid:%d;%d@%s" (uidSequenceNum uid) (uidRandomNum uid)
+             (show $ uidNodeId uid)
+
+-- | The unique Id Binary instance
+instance Binary UniqueId where
+  put uid = do put $ uidSequenceNum uid
+               put $ uidRandomNum uid
+               put $ uidNodeId uid
+  get = do sequenceNum <- get
+           randomNum <- get
+           nid <- get
+           return $ UniqueId { uidSequenceNum = sequenceNum,
+                               uidRandomNum = randomNum,
+                               uidNodeId = nid }
+
+-- | The unique Id Hashable instance
+instance Hashable UniqueId
 
 -- | The node Id type
 data NodeId =

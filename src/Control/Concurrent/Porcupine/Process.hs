@@ -45,6 +45,7 @@ module Control.Concurrent.Porcupine.Process
    NodeId,
    PartialNodeId,
    GroupId,
+   UniqueId,
    SourceId (..),
    DestId (..),
    UserRemoteConnectFailed (..),
@@ -90,6 +91,7 @@ module Control.Concurrent.Porcupine.Process
    tryLookup,
    lookup,
    newGroupId,
+   newUniqueId,
    connect,
    connectRemote,
    catch,
@@ -514,7 +516,16 @@ newProcessIdForNode node = do
                        pidRandomNum = randomNum,
                        pidNodeId = nodeId node }
 
--- | genreate a new node-unique Id.
+-- | Generate a new unique Id.
+newUniqueId :: Process UniqueId
+newUniqueId = do
+  processInfo <- Process St.get
+  (nextSequenceNum, randomNum) <- liftIO . newUnique $ procNode processInfo
+  return $ UniqueId { uidSequenceNum = nextSequenceNum,
+                      uidRandomNum = randomNum,
+                      uidNodeId = nodeId $ procNode processInfo }
+
+-- | Generate a new node-unique Id.
 newUnique :: Node -> IO (Integer, Integer)
 newUnique node = do
   atomically $ do

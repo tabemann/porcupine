@@ -36,9 +36,13 @@ module Control.Concurrent.Porcupine.Utility
   (matchHeader,
    matchProcessId,
    matchHeaderAndProcessId,
+   matchUniqueId,
+   matchHeaderAndUniqueId,
    excludeHeader,
    excludeProcessId,
    excludeHeaderAndProcessId,
+   excludeUniqueId,
+   excludeHeaderAndUniqueId,
    isEnd,
    isNormalEnd,
    isFail,
@@ -46,8 +50,14 @@ module Control.Concurrent.Porcupine.Utility
    isNormalEndForProcessId,
    isFailForProcessId,
    tryDecodeMessage,
+   tryDecodeMessageWithUniqueId,
+   tryDecodeMessageWithoutUniqueId,
+   tryDecodeUniqueId,
    processIdOfMessage,
+   sendWithUniqueId,
+   sendWithUniqueIdAsProxy,
    reply,
+   replyWithUniqueId,
    nodeIdOfSourceId,
    nodeIdOfDestId,
    processIdOfSourceId,
@@ -69,6 +79,40 @@ import qualified Data.Sequence as S
 import qualified Data.Binary as B
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString as BS
+import Data.Binary.Get (Get)
+import Data.Binary.Put (Put)
+import Data.Hashable (Hashable(..))
+import GHC.Generics (Generic)
+import Control.Monad.Fail (fail)
+import Text.Printf (printf)
+import Prelude hiding (fail)
+
+-- | Unique Id payload type
+data UniqueIdPayload =
+  UniqueIdPayload { uidpUniqueId :: P.UniqueId,
+                    uidpPayload :: P.Payload }
+  deriving (Eq, Ord, Generic)
+
+-- | Unique Id header type Binary instance
+instance B.Binary UniqueIdPayload where
+  put UniqueIdPayload{..} = do B.put uniqueIdPayloadMagicValue
+                               B.put uidpUniqueId
+                               B.put uidpPayload
+  get = do uidpMagic <- B.get
+           if uidpMagic == uniqueIdPayloadMagicValue
+             then do
+               uid <- B.get
+               payload <- B.get
+               return $ UniqueIdPayload { uidpUniqueId = uid,
+                                          uidpPayload = payload }
+             else fail "not a unique Id payload"
+
+-- | Unique Id header type Hashable instance
+instance Hashable UniqueIdPayload
+
+-- | Unique Id payload magic value
+uniqueIdPayloadMagicValue :: P.Header
+uniqueIdPayloadMagicValue = encode ("uniqueIdMagic" :: T.Text)
 
 -- | Quit header
 quitHeader :: P.Header
@@ -108,6 +152,19 @@ matchHeaderAndProcessId :: P.Message -> P.Header -> P.ProcessId -> Bool
 matchHeaderAndProcessId message header pid =
   matchHeader message header && matchProcessId message pid
 
+-- | Match a unique Id.
+matchUniqueId :: P.Message -> P.UniqueId -> Bool
+matchUniqueId message uid =
+  case tryDecodeUniqueId message of
+    Right uid' -> uid == uid'
+    Left _ -> False
+
+-- | Match a message header and a unique Id.
+matchHeaderAndUniqueId :: P.Message -> P.Header -> P.UniqueId -> Bool
+matchHeaderAndUniqueId message header uid
+  | matchHeader message header = matchUniqueId message uid
+  | True = False
+
 -- | Exclude a message header.
 excludeHeader :: P.Message -> P.Header -> Bool
 excludeHeader message header = P.messageHeader message /= header
@@ -121,6 +178,19 @@ excludeProcessId message pid =
 excludeHeaderAndProcessId :: P.Message -> P.Header -> P.ProcessId -> Bool
 excludeHeaderAndProcessId message header pid =
   excludeHeader message header && excludeProcessId message pid
+
+-- | Exclude a unique Id.
+excludeUniqueId :: P.Message -> P.UniqueId -> Bool
+excludeUniqueId message uid =
+  case tryDecodeUniqueId message of
+    Right uid' -> uid /= uid'
+    Left _ -> True
+
+-- | Exclude a message header and a unique Id.
+excludeHeaderAndUniqueId :: P.Message -> P.Header -> P.UniqueId -> Bool
+excludeHeaderAndUniqueId message header uid
+  | matchHeader message header = not $ matchUniqueId message uid
+  | True = True
 
 -- | Get whether a message indicates end.
 isEnd :: P.Message -> Bool
@@ -163,8 +233,52 @@ isFailForProcessId message pid = (matchHeader message diedHeader ||
 tryDecodeMessage :: B.Binary a => P.Message -> Either T.Text a
 tryDecodeMessage = tryDecode . P.messagePayload
 
+-- | Try to decode a message payload with a unique Id
+tryDecodeMessageWithUniqueId :: B.Binary a => P.Message ->
+                                Either T.Text (a, P.UniqueId)
+tryDecodeMessageWithUniqueId msg =
+  case tryDecodeMessage msg :: Either T.Text UniqueIdPayload of
+    Right uidPayload ->
+      case tryDecode $ uidpPayload uidPayload of
+        Right payload -> Right (payload, uidpUniqueId uidPayload)
+        Left errorText -> Left errorText
+    Left errorText -> Left errorText
+
+-- | Try to decode a message payload omitting a unique Id
+tryDecodeMessageWithoutUniqueId :: B.Binary a => P.Message -> Either T.Text a
+tryDecodeMessageWithoutUniqueId msg =
+  case tryDecodeMessage msg :: Either T.Text UniqueIdPayload of
+    Right uidPayload ->
+      case tryDecode $ uidpPayload uidPayload of
+        Right payload -> Right payload
+        Left errorText -> Left errorText
+    Left errorText -> Left errorText
+
+-- | Try to decode a unique Id for a message
+tryDecodeUniqueId :: P.Message -> Either T.Text P.UniqueId
+tryDecodeUniqueId msg =
+  case tryDecodeMessage msg :: Either T.Text UniqueIdPayload of
+    Right uidPayload -> Right $ uidpUniqueId uidPayload
+    Left errorText -> Left errorText
+
 -- | Get the process Id of a message.
 processIdOfMessage = processIdOfSourceId . P.messageSourceId
+
+-- | Send a message with a unique Id.
+sendWithUniqueId :: P.DestId -> P.UniqueId -> P.Header -> P.Payload ->
+                    P.Process ()
+sendWithUniqueId did uid header payload =
+  let payload' = encode $ UniqueIdPayload { uidpUniqueId = uid,
+                                            uidpPayload = payload }
+  in P.send did header payload
+
+-- | Send a message as a proxy with a unique Id.
+sendWithUniqueIdAsProxy :: P.DestId -> P.SourceId -> P.UniqueId -> P.Header ->
+                           P.Payload -> P.Process ()
+sendWithUniqueIdAsProxy did sid uid header payload =
+  let payload' = encode $ UniqueIdPayload { uidpUniqueId = uid,
+                                            uidpPayload = payload }
+  in P.sendAsProxy did sid header payload
 
 -- | Reply to a message.
 reply :: P.Message -> P.Header -> P.Payload -> P.Process ()
@@ -172,6 +286,16 @@ reply msg header payload =
   case processIdOfMessage msg of
     Just pid -> P.send (P.ProcessDest pid) header payload
     Nothing -> return ()
+
+-- | Reply to a message, with a unique Id extracted from the message.
+replyWithUniqueId :: P.Message -> P.Header -> P.Payload -> P.Process ()
+replyWithUniqueId msg header payload =
+  case tryDecodeUniqueId msg of
+    Right uid ->
+      case processIdOfMessage msg of
+        Just pid -> sendWithUniqueId (P.ProcessDest pid) uid header payload
+        Nothing -> return ()
+    Left _ -> return ()
 
 -- | Get node Id of destination Id
 nodeIdOfDestId :: P.DestId -> Maybe P.NodeId

@@ -336,7 +336,7 @@ handleRemoteConnectFailed pnid = do
     if prnodeId pnode == pnid
     then do
       forM_ (prnodeEndListeners pnode) $ \(did, _) ->
-        sendLocalUserMessage $ Message NoSource did header payload
+        sendLocalUserMessage $ Message NoSource did header payload S.empty
     else return ()
   St.modify $ \state ->
     state { nodePendingRemoteNodes =
@@ -354,7 +354,7 @@ handleRemoteDisconnected nid = do
       logMessage $ printf "Found remote node for end\n"
       forM_ (rnodeEndListeners rnode) $ \(did, _) -> do
         logMessage . printf "Sending end message to %s\n" $ show did
-        sendLocalUserMessage $ Message NoSource did header payload
+        sendLocalUserMessage $ Message NoSource did header payload S.empty
       St.modify $ \state ->
         state { nodeRemoteNodes = M.delete nid $ nodeRemoteNodes state }
     Nothing -> return ()
@@ -887,14 +887,14 @@ sendEndMessageForProcess process message = do
                           causeCauseId = causeId }
           Nothing -> NormalSource pid
   forM_ (pstateEndListeners process) $ \(did, _) ->
-    sendLocalUserMessage $ Message sourceId did header payload
+    sendLocalUserMessage $ Message sourceId did header payload S.empty
   groups <- M.elems . nodeGroups <$> St.get
   forM_ groups $ \group -> do
     case S.findIndexL (\(pid', _) -> pid == pid') $
          groupLocalSubscribers group of
       Just _ -> do
         forM_ (groupEndListeners group) $ \(did, _) ->
-          sendLocalUserMessage $ Message sourceId did header payload
+          sendLocalUserMessage $ Message sourceId did header payload S.empty
       Nothing -> return ()
 
 -- | Kill a process.

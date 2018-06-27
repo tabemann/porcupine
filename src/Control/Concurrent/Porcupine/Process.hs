@@ -41,6 +41,9 @@ module Control.Concurrent.Porcupine.Process
    Payload,
    Name,
    Key,
+   AnnotationTag,
+   AnnotationValue,
+   Annotation (..),
    ProcessId,
    NodeId,
    PartialNodeId,
@@ -58,15 +61,21 @@ module Control.Concurrent.Porcupine.Process
    messageDestId,
    messageHeader,
    messagePayload,
+   messageAnnotations,
    spawnInit,
+   spawnInitAnnotated,
    spawnInit',
    spawn,
+   spawnAnnotated,
    spawn',
    spawnAsProxy,
+   spawnAnnotatedAsProxy,
    spawnAsProxy',
    spawnListenEnd,
+   spawnListenEndAnnotated,
    spawnListenEnd',
    spawnListenEndAsProxy,
+   spawnListenEndAnnotatedAsProxy,
    spawnListenEndAsProxy',
    quit,
    quit',
@@ -79,7 +88,9 @@ module Control.Concurrent.Porcupine.Process
    shutdownAsProxy,
    shutdownAsProxy',
    send,
+   sendAnnotated,
    sendAsProxy,
+   sendAnnotatedAsProxy,
    receive,
    tryReceive,
    subscribe,
@@ -165,16 +176,28 @@ messageHeader = msgHeader
 messagePayload :: Message -> Payload
 messagePayload = msgPayload
 
+-- | Get the annotations of a message.
+messageAnnotations :: Message -> S.Seq Annotation
+messageAnnotations = msgAnnotations
+
 -- | Spawn a process on the local node without a preexisting process.
 spawnInit :: Entry -> Node -> Header -> Payload -> IO ProcessId
-spawnInit entry node header payload = do
+spawnInit entry node header payload =
+  spawnInitAnnotated entry node header payload S.empty
+
+-- | Spawn a process on the local node without a preexisting process with
+-- annotations.
+spawnInitAnnotated :: Entry -> Node -> Header -> Payload -> S.Seq Annotation ->
+                      IO ProcessId
+spawnInitAnnotated entry node header payload annotations = do
   spawnedPid <- newProcessIdForNode node
   let message =
         SpawnMessage { spawnMessage =
                          Message { msgSourceId = NoSource,
                                    msgDestId = ProcessDest spawnedPid,
                                    msgHeader = header,
-                                   msgPayload = payload },
+                                   msgPayload = payload,
+                                   msgAnnotations = annotations },
                        spawnEntry = entry,
                        spawnProcessId = spawnedPid,
                        spawnEndListeners = S.empty } 
@@ -191,13 +214,20 @@ spawnInit' action node = spawnInit (\_ -> action) node BS.empty BS.empty
 -- | Spawn a process on the local node normally.
 spawn :: Entry -> Header -> Payload -> Process ProcessId
 spawn entry header payload = do
+  spawnAnnotated entry header payload S.empty
+
+-- | Spawn a process on the local node normally with annotations.
+spawnAnnotated :: Entry -> Header -> Payload -> S.Seq Annotation ->
+                  Process ProcessId
+spawnAnnotated entry header payload annotations = do
   pid <- myProcessId
   spawnedPid <- newProcessId
   sendRaw $ SpawnMessage { spawnMessage =
                              Message { msgSourceId = NormalSource pid,
                                        msgDestId = ProcessDest spawnedPid,
                                        msgHeader = header,
-                                       msgPayload = payload },
+                                       msgPayload = payload,
+                                       msgAnnotations = annotations },
                            spawnEntry = entry,
                            spawnProcessId = spawnedPid,
                            spawnEndListeners = S.empty }
@@ -210,13 +240,21 @@ spawn' action = spawn (\_ -> action) BS.empty BS.empty
 
 -- | Spawn a process on the local node normally for another process.
 spawnAsProxy :: Entry -> ProcessId -> Header -> Payload -> Process ()
-spawnAsProxy entry pid header payload = do
+spawnAsProxy entry pid header payload =
+  spawnAnnotatedAsProxy entry pid header payload S.empty
+
+-- | Spawn a process on the local node normally with annotations for another
+-- process.
+spawnAnnotatedAsProxy :: Entry -> ProcessId -> Header -> Payload ->
+                         S.Seq Annotation -> Process ()
+spawnAnnotatedAsProxy entry pid header payload annotations = do
   spawnedPid <- newProcessId
   sendRaw $ SpawnMessage { spawnMessage =
                              Message { msgSourceId = NormalSource pid,
                                        msgDestId = ProcessDest spawnedPid,
                                        msgHeader = header,
-                                       msgPayload = payload },
+                                       msgPayload = payload,
+                                       msgAnnotations = annotations },
                            spawnEntry = entry,
                            spawnProcessId = spawnedPid,
                            spawnEndListeners = S.empty } 
@@ -230,14 +268,22 @@ spawnAsProxy' action pid = spawnAsProxy (\_ -> action) pid BS.empty BS.empty
 -- | Spawn a process on the local node normally and atomically listen for end.
 spawnListenEnd :: Entry -> Header -> Payload -> S.Seq DestId ->
                   Process ProcessId
-spawnListenEnd entry header payload endListeners = do
+spawnListenEnd entry header payload endListeners =
+  spawnListenEndAnnotated entry header payload S.empty endListeners
+
+-- | Spawn a process on the local node normally with annotation and atomically
+-- listen for end.
+spawnListenEndAnnotated :: Entry -> Header -> Payload -> S.Seq Annotation ->
+                           S.Seq DestId -> Process ProcessId
+spawnListenEndAnnotated entry header payload annotations endListeners = do
   pid <- myProcessId
   spawnedPid <- newProcessId
   sendRaw $ SpawnMessage { spawnMessage =
                              Message { msgSourceId = NormalSource pid,
                                        msgDestId = ProcessDest spawnedPid,
                                        msgHeader = header,
-                                       msgPayload = payload },
+                                       msgPayload = payload,
+                                       msgAnnotations = annotations },
                            spawnEntry = entry,
                            spawnProcessId = spawnedPid,
                            spawnEndListeners = endListeners }
@@ -254,13 +300,22 @@ spawnListenEnd' action endListeners =
 -- atomically listen for end.
 spawnListenEndAsProxy :: Entry -> ProcessId -> Header -> Payload ->
                          S.Seq DestId -> Process ()
-spawnListenEndAsProxy entry pid header payload endListeners = do
+spawnListenEndAsProxy entry pid header payload endListeners =
+  spawnListenEndAnnotatedAsProxy entry pid header payload S.empty endListeners
+
+-- | Spawn a process on the local node normally with annotation for another
+-- process and atomically listen for end.
+spawnListenEndAnnotatedAsProxy :: Entry -> ProcessId -> Header -> Payload ->
+                                  S.Seq Annotation -> S.Seq DestId -> Process ()
+spawnListenEndAnnotatedAsProxy entry pid header payload annotations
+  endListeners = do
   spawnedPid <- newProcessId
   sendRaw $ SpawnMessage { spawnMessage =
                              Message { msgSourceId = NormalSource pid,
                                        msgDestId = ProcessDest spawnedPid,
                                        msgHeader = header,
-                                       msgPayload = payload },
+                                       msgPayload = payload,
+                                       msgAnnotations = annotations },
                            spawnEntry = entry,
                            spawnProcessId = spawnedPid,
                            spawnEndListeners = endListeners } 
@@ -274,22 +329,34 @@ spawnListenEndAsProxy' action pid endListeners =
 
 -- | Send a message to a process or group.
 send :: DestId -> Header -> Payload -> Process ()
-send did header payload = do
+send did header payload = sendAnnotated did header payload S.empty
+
+-- | Send a message to a process or group with annotations.
+sendAnnotated :: DestId -> Header -> Payload -> S.Seq Annotation -> Process ()
+sendAnnotated did header payload annotations = do
   pid <- myProcessId
   sendRaw $ UserMessage { umsgMessage =
                             Message { msgSourceId = NormalSource pid,
                                       msgDestId = did,
                                       msgHeader = header,
-                                      msgPayload = payload } }
-  
+                                      msgPayload = payload,
+                                      msgAnnotations = annotations } }
+
 -- | Send a message to a process or group for another process.
 sendAsProxy :: DestId -> SourceId -> Header -> Payload -> Process ()
-sendAsProxy did sid header payload = do
+sendAsProxy did sid header payload =
+  sendAnnotatedAsProxy did sid header payload S.empty
+
+-- | Send a message to a process or group for another process with annotation.
+sendAnnotatedAsProxy :: DestId -> SourceId -> Header -> Payload ->
+                        S.Seq Annotation -> Process ()
+sendAnnotatedAsProxy did sid header payload annotations = do
   sendRaw $ UserMessage { umsgMessage =
                             Message { msgSourceId = sid,
                                       msgDestId = did,
                                       msgHeader = header,
-                                      msgPayload = payload } }
+                                      msgPayload = payload,
+                                      msgAnnotations = annotations } }
 
 -- | Quit the current process.
 quit :: Header -> Payload -> Process ()

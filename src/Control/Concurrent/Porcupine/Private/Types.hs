@@ -40,6 +40,9 @@ module Control.Concurrent.Porcupine.Private.Types
    Payload,
    Name,
    Key,
+   AnnotationTag,
+   AnnotationValue,
+   Annotation (..),
    ProcessInfo (..),
    Node (..),
    NodeState (..),
@@ -130,6 +133,29 @@ type Name = ByteString
 
 -- | The key type
 type Key = ByteString
+
+-- | The annotation key type
+type AnnotationTag = ByteString
+
+-- | The annotation value type
+type AnnotationValue = ByteString
+
+-- | The annotation type
+data Annotation = Annotation { annoTag :: AnnotationTag,
+                               annoValue :: AnnotationValue }
+                  deriving (Eq, Ord, Generic)
+
+-- | The annotation type Binary instance
+instance Binary Annotation where
+  put Annotation{..} = do put annoTag
+                          put annoValue
+  get = do tag <- get
+           value <- get
+           return $ Annotation { annoTag = tag,
+                                 annoValue = value }
+
+-- | The annotation type Hashable instance.
+instance Hashable Annotation
 
 -- | The process information type
 data ProcessInfo =
@@ -477,7 +503,8 @@ instance Hashable GroupId
 data Message = Message { msgSourceId :: !SourceId,
                          msgDestId :: !DestId,
                          msgHeader :: !Header,
-                         msgPayload :: !Payload }
+                         msgPayload :: !Payload,
+                         msgAnnotations :: !(Seq Annotation) }
                deriving (Eq, Ord, Generic)
 
 -- | The message type Binary instance
@@ -487,18 +514,18 @@ instance Binary Message where
     put msgDestId
     put msgHeader
     put msgPayload
+    put msgAnnotations
   get = do
     sourceId <- get
     destId <- get
     header <- get
     payload <- get
+    annotations <- get
     return $ Message { msgSourceId = sourceId,
                        msgDestId = destId,
                        msgHeader = header,
-                       msgPayload = payload }
-
--- | The message type Hashable instance
-instance Hashable Message
+                       msgPayload = payload,
+                       msgAnnotations = annotations }
 
 -- | The message type
 data LocalMessage = UserMessage { umsgMessage :: !Message }
@@ -759,9 +786,6 @@ instance Binary RemoteMessage where
         return $ RemoteJoinMessage { rjoinNodeId = nid }
       12 -> return RemoteLeaveMessage
       _ -> fail "invalid remote message serialization"
-
--- | Remote messsage Hashable instance
-instance Hashable RemoteMessage
 
 -- | Pending remote node connect failed message.
 data UserRemoteConnectFailed =

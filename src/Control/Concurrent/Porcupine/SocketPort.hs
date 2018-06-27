@@ -668,7 +668,8 @@ handleIncoming state msg
       case U.tryDecodeMessage msg of
         Right container -> do
           forM_ (M.keys $ spsRegistered state) $ \did -> do
-            P.send did (P.mcontHeader container) (P.mcontPayload container)
+            P.sendAnnotated did (P.mcontHeader container)
+              (P.mcontPayload container) (P.mcontAnnotations container)
           return state
         Left _ -> return state
   | True = Nothing
@@ -684,7 +685,7 @@ handleOutgoing state msg
           then do
             let payload' =
                   U.encode $ P.MessageContainer (P.messageHeader msg)
-                  (P.messagePayload msg)
+                  (P.messagePayload msg) (P.messageAnnotations msg)
             P.send (P.ProcessDest $ spsSendPid state) sendRemoteHeader
               payload'
           else return ()

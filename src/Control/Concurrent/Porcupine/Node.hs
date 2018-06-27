@@ -409,7 +409,7 @@ handleLocalQuitMessage pid header payload = do
                             Just message -> Just message
                             Nothing ->
                               Just (quitHeader',
-                                    packageMessage header payload),
+                                    packageMessage header payload S.empty),
                         pstateTerminating = True }
                     else process)
     pid
@@ -925,7 +925,7 @@ killLocalProcess sourcePid destPid header payload = do
                                 Just message -> Just message
                                 Nothing ->
                                   Just (killedHeader,
-                                        packageMessage header payload),
+                                        packageMessage header payload S.empty),
                             pstateEndCause = Just sourcePid,
                             pstateTerminating = True })
           destPid
@@ -1638,10 +1638,13 @@ updateRemoteGroups nid = do
           RemoteListenEndMessage { rlendListenedId = GroupDest $ groupId group,
                                    rlendListenerId = did }
 
--- | Put a header and payload in a message container and then encode it.
-packageMessage :: Header -> Payload -> BS.ByteString
-packageMessage header payload =
-  encode $ MessageContainer { mcontHeader = header, mcontPayload = payload }
+-- | Put a header, payload, and annotations in a message container and then
+-- encode it.
+packageMessage :: Header -> Payload -> S.Seq Annotation -> BS.ByteString
+packageMessage header payload annotations =
+  encode $ MessageContainer { mcontHeader = header,
+                              mcontPayload = payload,
+                              mcontAnnotations = annotations }
 
 -- | Normalize end listeners.
 normalizeEndListeners :: S.Seq DestId -> S.Seq (DestId, Integer)

@@ -81,7 +81,8 @@ import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString as BS
 import Data.Binary.Get (Get)
 import Data.Binary.Put (Put)
-import Data.Hashable (Hashable(..))
+import Data.Hashable (Hashable (..))
+import Data.Foldable (Foldable (..))
 import GHC.Generics (Generic)
 import Control.Monad.Fail (fail)
 import Text.Printf (printf)

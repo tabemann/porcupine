@@ -92,7 +92,7 @@ ringRepeater count = do
                        Right text ->
                          Just $ do
                            liftIO $ printf "Got text: %s\n" text
-                           U.reply msg textHeader $
+                           U.replyWithUniqueId msg textHeader $
                              P.messagePayload msg
                        Left errorText -> error $ T.unpack errorText
                 else Nothing]
@@ -103,7 +103,7 @@ ringRepeater count = do
                     P.quit'
 
 -- | The ring sender process.
-ringSender :: NS.SockAddr -> P.ProcessId -> Int -> P.Process ()
+ringSender :: NS.SockAddr -> P.ProcessId -> Integer -> P.Process ()
 ringSender address pid count = do
   liftIO $ putStrLn "Connecting to node 0..."
   P.connectRemote 0 address Nothing
@@ -111,18 +111,23 @@ ringSender address pid count = do
   P.listenEnd $ P.ProcessDest pid
   myPid <- P.myProcessId
   P.send (P.ProcessDest pid) otherProcessHeader $ U.encode myPid
-  forM ([0..count - 1] :: [Int]) $ \i -> do
-    P.send (P.ProcessDest pid) textHeader . U.encode . T.pack $ printf "%d" i
+  uids <- forM ([0..count - 1] :: S.Seq Integer) $ \i -> do
+    uid <- P.newUniqueId
+    U.sendWithUniqueId (P.ProcessDest pid) uid textHeader . U.encode . T.pack $
+      printf "%d" i
     liftIO $ printf "Sent: %d\n" i
-  loop
-  where loop = do
-          P.receive
+    return uid
+  loop uids
+  where loop uids = do
+          uids <-P.receive
             [\msg ->
-                if U.matchHeader msg textHeader
+                if U.matchHeader msg textHeader &&
+                   any (U.matchUniqueId msg) uids
                 then case U.tryDecodeMessage msg :: Either T.Text T.Text of
                        Right text ->
                          Just $ do
                            liftIO $ printf "Got text back: %s\n" text
+                           return $ S.filter (not . U.matchUniqueId msg) uids
                        Left errorText -> error $ T.unpack errorText
                 else if U.isEnd msg
                 then Just $ do
@@ -130,8 +135,9 @@ ringSender address pid count = do
                   nid <- P.myNodeId
                   P.shutdown' nid
                   P.quit'
-                else Just $ return ()]
-          loop
+                  return uids
+                else Just $ return uids]
+          loop uids
 
 -- | A ring messaging test.
 ringMessagingTest :: IO ()

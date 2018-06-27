@@ -826,18 +826,20 @@ instance Show UserRemoteDisconnected where
 instance Hashable UserRemoteDisconnected
 
 -- | Message container type.
-data MessageContainer = MessageContainer { mcontHeader :: ByteString,
-                                           mcontPayload :: ByteString }
-                        deriving (Eq, Ord, Generic)
+data MessageContainer =
+  MessageContainer { mcontHeader :: ByteString,
+                     mcontPayload :: ByteString,
+                     mcontAnnotations :: Seq Annotation }
+  deriving (Eq, Ord, Generic)
 
 -- | Message container Binary instance.
 instance Binary MessageContainer where
   put MessageContainer{..} = do put mcontHeader
                                 put mcontPayload
+                                put mcontAnnotations
   get = do header <- get
            payload <- get
+           annotations <- get
            return $ MessageContainer { mcontHeader = header,
-                                       mcontPayload = payload }
-
--- | Message container Hashable instance.
-instance Hashable MessageContainer
+                                       mcontPayload = payload,
+                                       mcontAnnotations = annotations }

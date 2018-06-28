@@ -68,7 +68,8 @@ module Control.Concurrent.Porcupine.Private.Types
    RemoteMessage (..),
    UserRemoteConnectFailed (..),
    UserRemoteDisconnected (..),
-   MessageContainer (..))
+   MessageContainer (..),
+   UserAssignment (..))
 
 where
 
@@ -195,14 +196,16 @@ data ProcessState =
                  pstateTerminating :: !Bool,
                  pstateEndMessage :: !(Maybe (Header, Payload)),
                  pstateEndCause :: !(Maybe ProcessId),
-                 pstateEndListeners :: !(Seq (DestId, Integer)) }
+                 pstateEndListeners :: !(Seq (DestId, Integer)),
+                 pstateAssignListening :: !Integer }
 
 -- | The group state type
 data GroupState =
   GroupState { groupId :: !GroupId,
                groupLocalSubscribers :: !(Seq (ProcessId, Integer)),
                groupRemoteSubscribers :: !(Seq (NodeId, Integer)),
-               groupEndListeners :: !(Seq (DestId, Integer)) }
+               groupEndListeners :: !(Seq (DestId, Integer)),
+               groupAssignListening :: !Integer }
 
 -- | The remote node state type
 data RemoteNodeState =
@@ -547,9 +550,11 @@ data LocalMessage = UserMessage { umsgMessage :: !Message }
                   | UnsubscribeMessage { usubProcessId :: !ProcessId,
                                          usubGroupId :: !GroupId }
                   | AssignMessage { assName :: !Name,
-                                    assDestId :: !DestId }
+                                    assDestId :: !DestId,
+                                    assNew :: !Bool }
                   | UnassignMessage { uassName :: !Name,
-                                      uassDestId :: !DestId }
+                                      uassDestId :: !DestId,
+                                      uassNew :: !Bool }
                   | ShutdownMessage { shutProcessId :: !ProcessId,
                                       shutNodeId :: !NodeId,
                                       shutHeader :: !Header,
@@ -562,6 +567,8 @@ data LocalMessage = UserMessage { umsgMessage :: !Message }
                                          ulendListenerId :: !DestId }
                   | HelloMessage { heloNode :: !Node }
                   | JoinMessage { joinNode :: !Node }
+                  | ListenAssignMessage { lassDestId :: !DestId }
+                  | UnlistenAssignMessage { ulassDestId :: !DestId }
              
 -- | The message source type
 data SourceId = NoSource
@@ -661,6 +668,8 @@ data RemoteMessage = RemoteUserMessage { rumsgMessage :: !Message }
                                                 rulendListenerId :: !DestId }
                    | RemoteJoinMessage { rjoinNodeId :: !NodeId }
                    | RemoteLeaveMessage
+                   | RemoteListenAssignMessage { rlassDestId :: !DestId }
+                   | RemoteUnlistenAssignMessage { rulassDestId :: !DestId }
                    deriving (Eq, Ord, Generic)
 
 -- | The remote message type Binary instance
@@ -717,6 +726,12 @@ instance Binary RemoteMessage where
     put rjoinNodeId
   put RemoteLeaveMessage = do
     put (12 :: Word8)
+  put RemoteListenAssignMessage{..} = do
+    put (13 :: Word8)
+    put rlassDestId
+  put RemoteUnlistenAssignMessage{..} = do
+    put (14 :: Word8)
+    put rulassDestId
   get = do
     select <- get :: Get Word8
     case select of
@@ -785,6 +800,12 @@ instance Binary RemoteMessage where
         nid <- get
         return $ RemoteJoinMessage { rjoinNodeId = nid }
       12 -> return RemoteLeaveMessage
+      13 -> do
+        destId <- get
+        return $ RemoteListenAssignMessage { rlassDestId = destId }
+      14 -> do
+        destId <- get
+        return $ RemoteUnlistenAssignMessage { rulassDestId = destId }
       _ -> fail "invalid remote message serialization"
 
 -- | Pending remote node connect failed message.
@@ -843,3 +864,18 @@ instance Binary MessageContainer where
            return $ MessageContainer { mcontHeader = header,
                                        mcontPayload = payload,
                                        mcontAnnotations = annotations }
+
+-- | User assignment type
+data UserAssignment =
+  UserAssignment { usasName :: ByteString,
+                   usasDestId :: DestId }
+  deriving (Eq, Ord, Generic)
+
+-- | User assignment Binary instance
+instance Binary UserAssignment where
+  put UserAssignment{..} = do put usasName
+                              put usasDestId
+  get = do name <- get
+           destId <- get
+           return $ UserAssignment { usasName = name,
+                                     usasDestId = destId }

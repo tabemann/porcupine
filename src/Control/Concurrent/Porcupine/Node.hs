@@ -89,6 +89,7 @@ import Control.Monad (forM,
                       forM_,
                       replicateM,
                       when,
+                      join,
                       (=<<))
 import Data.Functor ((<$>),
                      fmap)
@@ -205,10 +206,10 @@ handleLocalMessage UnsubscribeMessage{..} = do
   handleLocalUnsubscribeMessage usubProcessId usubGroupId
 handleLocalMessage AssignMessage{..} = do
   logMessage $ printf "GOT AssignMessage\n"
-  handleLocalAssignMessage assName assDestId
+  handleLocalAssignMessage assName assDestId assNew
 handleLocalMessage UnassignMessage{..} = do
   logMessage $ printf "GOT UnassignMessage\n"
-  handleLocalUnassignMessage uassName uassDestId
+  handleLocalUnassignMessage uassName uassDestId uassNew
 handleLocalMessage ShutdownMessage{..} = do
   logMessage $ printf "GOT ShutdownMessage FROM %s\n" $ show shutProcessId
   handleLocalShutdownMessage shutProcessId shutNodeId shutHeader shutPayload
@@ -230,6 +231,12 @@ handleLocalMessage HelloMessage{..} = do
 handleLocalMessage JoinMessage{..} = do
   logMessage $ printf "GOT JoinMessage\n"
   handleLocalJoinMessage joinNode
+handleLocalMessage ListenAssignMessage{..} = do
+  logMessage $ printf "GOT ListenAssignMessage\n"
+  handleLocalListenAssignMessage lassDestId
+handleLocalMessage UnlistenAssignMessage{..} = do
+  logMessage $ printf "GOT UnlistenAssignMessage\n"
+  handleLocalUnlistenAssignMessage ulassDestId;
 
 -- | Handle a remote event.
 handleEvent :: Event -> NodeM ()
@@ -289,6 +296,12 @@ handleRemoteMessage nodeId RemoteJoinMessage{..} = do
 handleRemoteMessage nodeId RemoteLeaveMessage = do
   logMessage . printf "GOT RemoteLeaveMessage FROM %s" $ show nodeId
   handleRemoteLeaveMessage nodeId
+handleRemoteMessage nodeId RemoteListenAssignMessage{..} = do
+  logMessage $ printf "GOT RemoteListenAssignMessage\n"
+  handleRemoteListenAssignMessage nodeId rlassDestId
+handleRemoteMessage nodeId RemoteUnlistenAssignMessage{..} = do
+  logMessage $ printf "GOT RemoteUnlistenAssignMessage\n"
+  handleRemoteUnlistenAssignMessage nodeId rulassDestId;
 
 -- | Handle a remote connected event.
 handleRemoteConnected :: NodeId -> NS.Socket -> BS.ByteString -> NodeM ()
@@ -392,7 +405,8 @@ handleLocalSpawnMessage message entry processId endListeners = do
                        pstateTerminating = False,
                        pstateEndMessage = Nothing,
                        pstateEndCause = Nothing,
-                       pstateEndListeners = normalizeEndListeners endListeners }
+                       pstateEndListeners = normalizeEndListeners endListeners,
+                       pstateAssignListening = 0 }
   St.modify $ \state ->
     state { nodeProcesses = M.insert processId processState $
                             nodeProcesses state }
@@ -444,7 +458,7 @@ handleLocalEndMessage processId exception = do
       sendEndMessageForProcess process message
 
 -- | Died header.
-diedHeader :: BS.ByteString
+diedHeader :: Header
 diedHeader = encode ("died" :: T.Text)
 
 -- | Handle a local kill message.
@@ -493,15 +507,28 @@ handleLocalUnsubscribeMessage pid gid = do
                                                       rusubGroupId = gid }
 
 -- | Handle a local assign message.
-handleLocalAssignMessage :: Name -> DestId -> NodeM ()
-handleLocalAssignMessage name destId = do
+handleLocalAssignMessage :: Name -> DestId -> Bool -> NodeM ()
+handleLocalAssignMessage name destId new = do
+  if new
+    then notifyAssign name destId
+    else return ()
   broadcastRemoteMessage $ RemoteAssignMessage { rassName = name,
                                                  rassDestId = destId }
   
-
 -- | Handle a local unassign message.
-handleLocalUnassignMessage :: Name -> DestId -> NodeM ()
-handleLocalUnassignMessage name destId = do
+handleLocalUnassignMessage :: Name -> DestId -> Bool -> NodeM ()
+handleLocalUnassignMessage name destId new = do
+  if new
+    then do notifyUnassign name destId
+            names <- liftIO . atomically . readTVar =<<
+                     nodeNames . nodeInfo <$> St.get
+            case M.lookup name names of
+              Just bindings ->
+                case S.viewl bindings of
+                  (destId', _) :< _ -> notifyAssign name destId'
+                  _ -> return ()
+              Nothing -> return ()
+    else return ()
   broadcastRemoteMessage $ RemoteUnassignMessage { ruassName = name,
                                                    ruassDestId = destId }
 
@@ -583,10 +610,47 @@ handleLocalJoinMessage node = do
     Nothing -> connectLocalWithoutBroadcast node
     Just _ -> return ()
 
+-- | Handle a local listen assign message.
+handleLocalListenAssignMessage :: DestId -> NodeM ()
+handleLocalListenAssignMessage did =
+  case did of
+    ProcessDest pid -> do
+      nid <- nodeId . nodeInfo <$> St.get
+      if pidNodeId pid == nid
+        then updateProcess
+               (\process -> process { pstateAssignListening =
+                                        pstateAssignListening process + 1 }) pid
+        else sendRemoteMessage (pidNodeId pid) $
+               RemoteListenAssignMessage { rlassDestId = did }
+    GroupDest gid -> do
+      updateGroup (\group -> group { groupAssignListening =
+                                       groupAssignListening group + 1 }) gid
+      broadcastRemoteMessage $ RemoteListenAssignMessage { rlassDestId = did }
+
+-- | Handle a local unlisten assign message.
+handleLocalUnlistenAssignMessage :: DestId -> NodeM ()
+handleLocalUnlistenAssignMessage did =
+  case did of
+    ProcessDest pid -> do
+      nid <- nodeId . nodeInfo <$> St.get
+      if pidNodeId pid == nid
+        then updateProcess
+               (\process ->
+                  process { pstateAssignListening =
+                              max 0 $ pstateAssignListening process - 1 }) pid
+        else sendRemoteMessage (pidNodeId pid) $
+               RemoteUnlistenAssignMessage { rulassDestId = did }
+    GroupDest gid -> do
+      updateGroup (\group ->
+                     group { groupAssignListening =
+                               max 0 $ groupAssignListening group - 1 }) gid
+      broadcastRemoteMessage $
+        RemoteUnlistenAssignMessage { rulassDestId = did }
+
 -- | Handle a remote user message.
 handleRemoteUserMessage :: NodeId -> Message -> NodeM ()
 handleRemoteUserMessage nid msg = do
-  handleIncomingUserMessage msg
+  sendLocalOnlyUserMessage msg
 
 -- | Handle a remote process end message.
 handleRemoteEndMessage :: NodeId -> SourceId -> Header -> Payload ->
@@ -651,38 +715,59 @@ handleRemoteUnsubscribeMessage nid _ gid = do
 handleRemoteAssignMessage :: NodeId -> Name -> DestId -> NodeM ()
 handleRemoteAssignMessage _ name did = do
   names <- nodeNames . nodeInfo <$> St.get
-  names' <- liftIO . atomically $ readTVar names
-  liftIO . atomically . writeTVar names $
-    case M.lookup name names' of
-      Just entries ->
-        case S.findIndexL (\(did', _) -> did == did') entries of
-          Just index ->
-            let entries' =
-                  S.adjust' (\(did', count) -> (did', count + 1)) index entries
-            in M.insert name entries' names'
-          Nothing -> M.insert name (entries |> (did, 1)) names'
-      Nothing -> M.insert name (S.singleton (did, 1)) names'
+  join . liftIO . atomically $ do
+    names' <- readTVar names
+    let (names'', new) =
+          case M.lookup name names' of
+            Just entries ->
+              case S.findIndexL (\(did', _) -> did == did') entries of
+                Just index ->
+                  let entries' =
+                        S.adjust' (\(did', count) -> (did', count + 1))
+                        index entries
+                  in (M.insert name entries' names', False)
+                Nothing -> (M.insert name (entries |> (did, 1)) names', False)
+            Nothing -> (M.insert name (S.singleton (did, 1)) names', True)
+    writeTVar names names''
+    if new
+      then return $ notifyAssign name did
+      else return $ return ()
 
 -- | Handle a remote unassign message.
 handleRemoteUnassignMessage :: NodeId -> Name -> DestId -> NodeM ()
 handleRemoteUnassignMessage _ name did = do
   names <- nodeNames . nodeInfo <$> St.get
-  names' <- liftIO . atomically $ readTVar names
-  liftIO . atomically . writeTVar names $
-    case M.lookup name names' of
-      Just entries ->
-        case S.findIndexL (\(did', _) -> did == did') entries of
-          Just index ->
-            case S.lookup index entries of
-              Just (_, count)
-                | count > 1 ->
-                  let entries' = S.adjust' (\(did', count) -> (did', count - 1))
-                                 index entries
-                  in M.insert name entries' names'
-                | True -> M.insert name (S.deleteAt index entries) names'
-              Nothing -> names'
-          Nothing -> names'
-      Nothing -> names'
+  join . liftIO . atomically $ do
+    names' <- readTVar names
+    let (names'', new) =
+          case M.lookup name names' of
+            Just entries ->
+              case S.findIndexL (\(did', _) -> did == did') entries of
+                Just index ->
+                  case S.lookup index entries of
+                    Just (_, count)
+                      | count > 1 ->
+                        let entries' =
+                              S.adjust' (\(did', count) -> (did', count - 1))
+                              index entries
+                        in (M.insert name entries' names', False)
+                      | True ->
+                          (M.insert name (S.deleteAt index entries) names',
+                           index == 0)
+                    Nothing -> (names', False)
+                Nothing -> (names', False)
+            Nothing -> (names', False)
+    writeTVar names names''
+    if new
+      then return $ do
+        notifyUnassign name did
+        case M.lookup name names'' of
+          Just bindings ->
+            case S.viewl bindings of
+              (did', _) :< _ -> notifyAssign name did'
+              _ -> return ()
+          Nothing -> return ()
+      else return $ return ()
 
 -- | Handle a remote shutdown message.
 handleRemoteShutdownMessage :: NodeId -> ProcessId -> Header -> Payload ->
@@ -727,6 +812,38 @@ handleRemoteJoinMessage nid remoteNid = do
 handleRemoteLeaveMessage :: NodeId -> NodeM ()
 handleRemoteLeaveMessage nid = return ()
 
+-- | Handle a remote listen assign message.
+handleRemoteListenAssignMessage :: NodeId -> DestId -> NodeM ()
+handleRemoteListenAssignMessage _ did =
+  case did of
+    ProcessDest pid -> do
+      nid <- nodeId . nodeInfo <$> St.get
+      if pidNodeId pid == nid
+        then updateProcess
+               (\process -> process { pstateAssignListening =
+                                        pstateAssignListening process + 1 }) pid
+        else return ()
+    GroupDest gid -> do
+      updateGroup (\group -> group { groupAssignListening =
+                                       groupAssignListening group + 1 }) gid
+
+-- | Handle a remote unlisten assign message.
+handleRemoteUnlistenAssignMessage :: NodeId -> DestId -> NodeM ()
+handleRemoteUnlistenAssignMessage _ did =
+  case did of
+    ProcessDest pid -> do
+      nid <- nodeId . nodeInfo <$> St.get
+      if pidNodeId pid == nid
+        then updateProcess
+               (\process ->
+                  process { pstateAssignListening =
+                              max 0 $ pstateAssignListening process - 1 }) pid
+        else return ()
+    GroupDest gid -> do
+      updateGroup (\group ->
+                     group { groupAssignListening =
+                               max 0 $ groupAssignListening group - 1 }) gid
+
 -- | Send a user message to a process.
 sendLocalUserMessage :: Message -> NodeM ()
 sendLocalUserMessage message = do
@@ -757,8 +874,8 @@ sendLocalUserMessage message = do
               RemoteUserMessage { rumsgMessage = message }
 
 -- | Send incoming user message to destination processes.
-handleIncomingUserMessage :: Message -> NodeM ()
-handleIncomingUserMessage message = do
+sendLocalOnlyUserMessage :: Message -> NodeM ()
+sendLocalOnlyUserMessage message = do
   state <- St.get
   case msgDestId message of
     ProcessDest pid ->
@@ -1179,7 +1296,8 @@ addSubscriber pid gid = do
                                      groupLocalSubscribers =
                                        S.singleton (pid, 1),
                                      groupRemoteSubscribers = S.empty,
-                                     groupEndListeners = S.empty }
+                                     groupEndListeners = S.empty,
+                                     groupAssignListening = 0 }
     else do
       case M.lookup gid $ nodeGroups state of
         Just group -> do
@@ -1220,7 +1338,8 @@ addSubscriber pid gid = do
                                      groupLocalSubscribers = S.empty,
                                      groupRemoteSubscribers =
                                        S.singleton (pidNodeId pid, 1),
-                                     groupEndListeners = S.empty }
+                                     groupEndListeners = S.empty,
+                                     groupAssignListening = 0 }
       
 -- | Start local communication with another node.
 startLocalCommunication :: Node -> NodeM ()
@@ -1637,6 +1756,66 @@ updateRemoteGroups nid = do
         sendRemoteMessage nid $
           RemoteListenEndMessage { rlendListenedId = GroupDest $ groupId group,
                                    rlendListenerId = did }
+
+-- | Notify local processes of assignment
+notifyAssign :: Name -> DestId -> NodeM ()
+notifyAssign name did = do
+  processes <- nodeProcesses <$> St.get
+  let assignmentPayload = encode $ UserAssignment { usasName = name,
+                                                    usasDestId = did }
+  forM_ processes $ \process ->
+    if pstateAssignListening process > 0
+    then sendLocalOnlyUserMessage $
+         Message { msgSourceId = NoSource,
+                   msgDestId = ProcessDest . procId $ pstateInfo process,
+                   msgHeader = assignedHeader,
+                   msgPayload = assignmentPayload,
+                   msgAnnotations = S.empty }
+    else return ()
+  groups <- nodeGroups <$> St.get
+  forM_ groups $ \group ->
+    if groupAssignListening group > 0
+    then sendLocalOnlyUserMessage $
+         Message { msgSourceId = NoSource,
+                   msgDestId = GroupDest $ groupId group,
+                   msgHeader = assignedHeader,
+                   msgPayload = assignmentPayload,
+                   msgAnnotations = S.empty }
+    else return ()
+
+-- | Notify local processes of unassignment
+notifyUnassign :: Name -> DestId -> NodeM ()
+notifyUnassign name did = do
+  processes <- nodeProcesses <$> St.get
+  let assignmentPayload = encode $ UserAssignment { usasName = name,
+                                                    usasDestId = did }
+  forM_ processes $ \process ->
+    if pstateAssignListening process > 0
+    then sendLocalOnlyUserMessage $
+         Message { msgSourceId = NoSource,
+                   msgDestId = ProcessDest . procId $ pstateInfo process,
+                   msgHeader = unassignedHeader,
+                   msgPayload = assignmentPayload,
+                   msgAnnotations = S.empty }
+    else return ()
+  groups <- nodeGroups <$> St.get
+  forM_ groups $ \group ->
+    if groupAssignListening group > 0
+    then sendLocalOnlyUserMessage $
+         Message { msgSourceId = NoSource,
+                   msgDestId = GroupDest $ groupId group,
+                   msgHeader = unassignedHeader,
+                   msgPayload = assignmentPayload,
+                   msgAnnotations = S.empty }
+    else return ()
+
+-- | Assigned header.
+assignedHeader :: Header
+assignedHeader = encode ("assigned" :: T.Text)
+
+-- | Unassigned header.
+unassignedHeader :: Header
+unassignedHeader = encode ("unassigned" :: T.Text)
 
 -- | Put a header, payload, and annotations in a message container and then
 -- encode it.

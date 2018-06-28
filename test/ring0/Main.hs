@@ -92,8 +92,7 @@ ringRepeater count = do
                        Right text ->
                          Just $ do
                            liftIO $ printf "Got text: %s\n" text
-                           U.replyWithUniqueId msg textHeader $
-                             P.messagePayload msg
+                           U.reply msg textHeader $ P.messagePayload msg
                        Left errorText -> error $ T.unpack errorText
                 else Nothing]
           if count > 1

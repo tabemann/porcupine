@@ -111,7 +111,11 @@ module Control.Concurrent.Porcupine.Process
    listenEnd,
    unlistenEnd,
    listenEndAsProxy,
-   unlistenEndAsProxy)
+   unlistenEndAsProxy,
+   listenAssign,
+   unlistenAssign,
+   listenAssignAsProxy,
+   unlistenAssignAsProxy)
 
 where
 
@@ -144,7 +148,8 @@ import Control.Concurrent.STM.TQueue (TQueue,
 import qualified Control.Monad.Trans.State.Strict as St
 import qualified Control.Exception.Base as E
 import Data.Functor ((<$>))
-import Control.Monad ((=<<))
+import Control.Monad ((=<<),
+                      join)
 import Control.Monad.IO.Class (MonadIO (..))
 import Prelude hiding (lookup)
 
@@ -491,46 +496,80 @@ unlistenEndAsProxy listenedId listenerId = do
   sendRaw $ UnlistenEndMessage { ulendListenedId = listenedId,
                                  ulendListenerId = listenerId }
 
+-- | Listen for name assignment and unassignment.
+listenAssign :: Process ()
+listenAssign = do
+  pid <- myProcessId
+  sendRaw $ ListenAssignMessage { lassDestId = ProcessDest pid }
+
+-- | Stop listening for name assignment and unassignment.
+unlistenAssign :: Process ()
+unlistenAssign = do
+  pid <- myProcessId
+  sendRaw $ UnlistenAssignMessage { ulassDestId = ProcessDest pid }
+
+-- | Set another process or group to listen for name assignment and
+-- unassignment.
+listenAssignAsProxy :: DestId -> Process ()
+listenAssignAsProxy listenerId = do
+  sendRaw $ ListenAssignMessage { lassDestId = listenerId }
+
+-- | Set another process or group to stop listening for name assignment and
+-- unassignment.
+unlistenAssignAsProxy :: DestId -> Process ()
+unlistenAssignAsProxy listenerId = do
+  sendRaw $ UnlistenAssignMessage { ulassDestId = listenerId }
+
 -- | Assign a name to a process or group.
 assign :: Name -> DestId -> Process ()
 assign name did = do
-  sendRaw $ AssignMessage { assName = name,
-                            assDestId = did }
   names <- nodeNames . procNode <$> Process St.get
-  names' <- liftIO . atomically $ readTVar names
-  liftIO . atomically . writeTVar names $
-    case M.lookup name names' of
-      Just entries ->
-        case S.findIndexL (\(did', _) -> did == did') entries of
-          Just index ->
-            let entries' =
-                  S.adjust (\(did', count) -> (did', count + 1)) index entries
-            in M.insert name entries' names'
-          Nothing -> M.insert name (entries |> (did, 1)) names'
-      Nothing -> M.insert name (S.singleton (did, 1)) names'
+  join . liftIO . atomically $ do
+    names' <- readTVar names
+    let (names'', new) =
+          case M.lookup name names' of
+            Just entries ->
+              case S.findIndexL (\(did', _) -> did == did') entries of
+                Just index ->
+                  let entries' =
+                        S.adjust (\(did', count) -> (did', count + 1))
+                        index entries
+                  in (M.insert name entries' names', False)
+                Nothing -> (M.insert name (entries |> (did, 1)) names', False)
+            Nothing -> (M.insert name (S.singleton (did, 1)) names', True)
+    writeTVar names names''
+    return . sendRaw $ AssignMessage { assName = name,
+                                       assDestId = did,
+                                       assNew = new }
 
 -- | Unassign a name from a process or group.
 unassign :: Name -> DestId -> Process ()
 unassign name did = do
-  sendRaw $ UnassignMessage { uassName = name,
-                              uassDestId = did }
   names <- nodeNames . procNode <$> Process St.get
-  names' <- liftIO . atomically $ readTVar names
-  liftIO . atomically . writeTVar names $
-    case M.lookup name names' of
-      Just entries ->
-        case S.findIndexL (\(did', _) -> did == did') entries of
-          Just index ->
-            case S.lookup index entries of
-              Just (_, count)
-                | count > 1 ->
-                  let entries' = S.adjust (\(did', count) -> (did', count - 1))
-                                 index entries
-                  in M.insert name entries' names'
-                | True -> M.insert name (S.deleteAt index entries) names'
-              Nothing -> names'
-          Nothing -> names'
-      Nothing -> names'
+  join . liftIO . atomically $ do
+    names' <- readTVar names
+    let (names'', new) =
+          case M.lookup name names' of
+            Just entries ->
+              case S.findIndexL (\(did', _) -> did == did') entries of
+                Just index ->
+                  case S.lookup index entries of
+                    Just (_, count)
+                      | count > 1 ->
+                        let entries' =
+                              S.adjust (\(did', count) -> (did', count - 1))
+                              index entries
+                        in (M.insert name entries' names', False)
+                      | True ->
+                          (M.insert name (S.deleteAt index entries) names',
+                           index == 0)
+                    Nothing -> (names', False)
+                Nothing -> (names', False)
+            Nothing -> (names', False)
+    writeTVar names names''
+    return . sendRaw $ UnassignMessage { uassName = name,
+                                         uassDestId = did,
+                                         uassNew = new }
 
 -- | Try to look up a process or group by name.
 tryLookup :: Name -> Process (Maybe DestId)

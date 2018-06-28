@@ -53,11 +53,12 @@ module Control.Concurrent.Porcupine.Utility
    tryDecodeMessage,
    tryDecodeAnnotation,
    tryDecodeUniqueId,
+   tryDecodeProxySourceId,
+   tryDecodeProxyDestId,
    processIdOfMessage,
    sendWithUniqueId,
    sendWithUniqueIdAsProxy,
    reply,
-   replyWithUniqueId,
    nodeIdOfSourceId,
    nodeIdOfDestId,
    processIdOfSourceId,
@@ -84,6 +85,7 @@ import Data.Binary.Put (Put)
 import Data.Hashable (Hashable (..))
 import Data.Foldable (Foldable (..))
 import GHC.Generics (Generic)
+import Data.Sequence ((><))
 import Control.Monad.Fail (fail)
 import Text.Printf (printf)
 import Prelude hiding (fail)
@@ -91,6 +93,14 @@ import Prelude hiding (fail)
 -- | Unique Id tag
 uniqueIdTag :: P.AnnotationTag
 uniqueIdTag = encode ("uniqueId" :: T.Text)
+
+-- | Proxy source Id tag
+proxySourceIdTag :: P.AnnotationTag
+proxySourceIdTag = encode ("proxySourceId" :: T.Text)
+
+-- | Proxy destination Id tag
+proxyDestIdTag :: P.AnnotationTag
+proxyDestIdTag = encode ("proxyDestId" :: T.Text)
 
 -- | Quit header
 quitHeader :: P.Header
@@ -237,6 +247,14 @@ tryDecodeAnnotation message tag =
 tryDecodeUniqueId :: P.Message -> Either T.Text (Maybe P.UniqueId)
 tryDecodeUniqueId = (flip tryDecodeAnnotation) uniqueIdTag
 
+-- | Try to decode a message proxy source Id.
+tryDecodeProxySourceId :: P.Message -> Either T.Text (Maybe P.SourceId)
+tryDecodeProxySourceId = (flip tryDecodeAnnotation) proxySourceIdTag
+
+-- | Try to decode a message proxy destination Id.
+tryDecodeProxyDestId :: P.Message -> Either T.Text (Maybe P.DestId)
+tryDecodeProxyDestId = (flip tryDecodeAnnotation) proxyDestIdTag
+
 -- | Get the process Id of a message.
 processIdOfMessage = processIdOfSourceId . P.messageSourceId
 
@@ -255,20 +273,23 @@ sendWithUniqueIdAsProxy did sid uid header payload =
 
 -- | Reply to a message.
 reply :: P.Message -> P.Header -> P.Payload -> P.Process ()
-reply msg header payload =
+reply msg header payload = do
+  let uniqueIdAnnotation =
+        case tryDecodeUniqueId msg of
+          Right (Just uid) -> [P.Annotation uniqueIdTag $ encode uid]
+          _ -> []
+      proxyDestIdAnnotation =
+        case tryDecodeProxySourceId msg of
+          Right (Just sid) ->
+            case processIdOfSourceId sid of
+              Just pid ->
+                [P.Annotation proxyDestIdTag . encode $ P.ProcessDest pid]
+              Nothing -> []
+          _ -> []
+      annotations = uniqueIdAnnotation >< proxyDestIdAnnotation
   case processIdOfMessage msg of
-    Just pid -> P.send (P.ProcessDest pid) header payload
+    Just pid -> P.sendAnnotated (P.ProcessDest pid) header payload annotations
     Nothing -> return ()
-
--- | Reply to a message, with a unique Id extracted from the message.
-replyWithUniqueId :: P.Message -> P.Header -> P.Payload -> P.Process ()
-replyWithUniqueId msg header payload =
-  case tryDecodeUniqueId msg of
-    Right (Just uid) ->
-      case processIdOfMessage msg of
-        Just pid -> sendWithUniqueId (P.ProcessDest pid) uid header payload
-        Nothing -> return ()
-    _ -> return ()
 
 -- | Get node Id of destination Id
 nodeIdOfDestId :: P.DestId -> Maybe P.NodeId

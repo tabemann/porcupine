@@ -150,7 +150,7 @@ data SocketPortState =
                     spsSendStopped :: Bool,
                     spsReceiveStopped :: Bool,
                     spsAssignment :: M.HashMap P.Name P.DestId,
-                    spsWaitAssignment :: S.Seq (P.Name, P.DestId) }
+                    spsWaitAssignment :: S.Seq (P.Name, P.DestId, P.UniqueId) }
 
 -- | Socket listener state
 data SocketListenerState =
@@ -696,8 +696,17 @@ handleLookupRemote state msg
               U.reply msg remoteAssignmentHeader payload
               return state
             Nothing ->
-              return $ state { spsWaitAssignment = spsWaitAssignment state |>
-                                                   (name, P.messageDestId msg) }
+              case U.tryDecodeUniqueId msg of
+                Right (Just uid) -> do
+                  logMessage . printf "Deferring remote lookup for %s\n" $
+                    show uid
+                  case U.processIdOfSourceId $ P.messageSourceId msg of
+                    Just pid ->
+                      let entry = (name, P.ProcessDest pid, uid)
+                      in return $ state { spsWaitAssignment =
+                                          spsWaitAssignment state |> entry }
+                    Nothing -> return state
+                _ -> return state
         Left _ -> return state
   | True = Nothing
 
@@ -729,6 +738,8 @@ handleIncoming state msg
     Just $ do
       case U.tryDecodeMessage msg of
         Right (SocketUserMessage container) -> do
+          logMessage . printf "Received user message with %d annotations\n" .
+            S.length $ P.mcontAnnotations container
           case getAnnotation (P.mcontAnnotations container) U.proxyDestIdTag of
             Just did ->
               case U.tryDecode did of
@@ -738,25 +749,32 @@ handleIncoming state msg
                         U.proxyDestIdTag
                   in P.sendAnnotated did (P.mcontHeader container)
                      (P.mcontPayload container) newAnnotations
-                Left _ -> return ()
-            Nothing -> return ()
+                Left _ -> logMessage "Failed to decode proxy destination Id\n"
+            Nothing -> logMessage "Failed to find proxy destination Id\n"
           return state
         Right (SocketAssign name destId) -> do
+          logMessage "Received assign message\n"
           waiting <-
-            forM (toList $ spsWaitAssignment state) $ \item@(name', destId') ->
-            if name == name'
-            then
-              let payload = U.encode $ P.UserAssignment name destId
-              in do P.send destId' remoteAssignmentHeader payload
-                    return S.empty
-            else return $ S.singleton item
+            forM (toList $ spsWaitAssignment state) $
+            \item@(name', destId', uid) ->
+              if name == name'
+              then do
+                logMessage . printf "Fulfilling remote lookup for %s\n" $
+                  show uid
+                let payload = U.encode $ P.UserAssignment name destId
+                U.sendWithUniqueId destId' uid remoteAssignmentHeader payload
+                return S.empty
+              else return $ S.singleton item
           return $ state { spsAssignment =
                              M.insert name destId $ spsAssignment state ,
                            spsWaitAssignment = mconcat waiting }
-        Right (SocketUnassign name destId) ->
+        Right (SocketUnassign name destId) -> do
+          logMessage "Received unassign message\n"
           return $ state { spsAssignment =
                              M.delete name $ spsAssignment state }
-        Left _ -> return state
+        Left _ -> do
+          logMessage "Failed to decode incoming message\n"
+          return state
   | True = Nothing
 
 -- | Get an annotation from an annotation sequence
@@ -773,7 +791,7 @@ getAnnotation annotations tag =
 -- | Remove an annotation from an annotation sequence
 unsetAnnotation :: S.Seq P.Annotation -> P.AnnotationTag -> S.Seq P.Annotation
 unsetAnnotation annotations tag =
-  S.filter (\(P.Annotation tag' _) -> tag /= tag) annotations
+  S.filter (\(P.Annotation tag' _) -> tag /= tag') annotations
 
 -- | Set an annotation in an annotation sequence
 setAnnotation :: S.Seq P.Annotation -> P.AnnotationTag -> P.AnnotationValue ->
@@ -814,7 +832,7 @@ startSendProcess parentPid socket key = do
       assignParts = map formatAssign $ M.toList allNames
       bytes = mconcat (U.encode magicValue :
                        U.encode (fromIntegral $ BS.length key' :: Word64) :
-                       assignParts)
+                       key' : assignParts)
   P.handle (\e -> const P.quit' (e :: IOException)) $ do
     liftIO $ NSB.sendAll socket bytes
   runSendProcess parentPid socket
@@ -850,7 +868,7 @@ handleAssigned socket msg
   | U.matchHeader msg U.assignedHeader =
     Just $ do
       case U.tryDecodeMessage msg of
-        Right P.UserAssignment{..} ->
+        Right P.UserAssignment{..} -> do
           sendSocketMessage socket $ SocketAssign usasName usasDestId
         Left _ -> return ()
   | True = Nothing  
@@ -915,9 +933,9 @@ runReceiveProcess parentPid socket buffer = do
       P.quit'
     Right messageLength -> do
       (message, rest) <- receiveBytes socket messageLength rest
-      case U.tryDecode message :: Either T.Text P.MessageContainer of
+      case U.tryDecode message :: Either T.Text SocketMessage of
         Left _ -> do
-          logMessage "Failed to decode message container\n"
+          logMessage "Failed to decode socket message\n"
           P.quit'
         Right _ -> do
           P.send (P.ProcessDest parentPid) receiveRemoteHeader message

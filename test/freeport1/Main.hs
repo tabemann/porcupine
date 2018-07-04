@@ -72,14 +72,13 @@ exitHeader = U.encode ("exit" :: T.Text)
 textHeader :: P.Header
 textHeader = U.encode ("text" :: T.Text)
 
--- | Repeater name
-repeaterName :: P.Name
-repeaterName = U.encode ("repeater" :: T.Text)
+-- | Repeater group name
+repeaterGroupName :: P.Name
+repeaterGroupName = U.encode ("repeaterGroup" :: T.Text)
 
 -- | Repeater
 repeater :: P.Process ()
 repeater = do
-  P.assign repeaterName . P.ProcessDest =<< P.myProcessId
   handleMessages
   where handleMessages = forever $ P.receive [handleText, handleExit]
         handleText msg
@@ -99,12 +98,39 @@ repeater = do
           | U.matchHeader msg exitHeader =
             Just $ do
               U.reply msg exitHeader BS.empty
-              liftIO $ threadDelay 10000
-              nid <- P.myNodeId
-              liftIO . printf "Shutting down %s\n" $ show nid
-              P.shutdown' nid
+              liftIO . printf "Quitting %s\n" . show =<< P.myProcessId
               P.quit'
           | True = Nothing
+
+-- | Start repeaters
+startRepeaters :: Integer -> P.Process ()
+startRepeaters count = do
+  gid <- P.newGroupId
+  myPid <- P.myProcessId
+  pids <- fmap S.fromList . forM ([0..count - 1] :: [Integer]) $ \i -> do
+    pid <- P.spawnListenEnd' repeater . S.singleton $ P.ProcessDest myPid
+    P.subscribeAsProxy gid pid
+    return pid
+  P.assign repeaterGroupName $ P.GroupDest gid
+  handleMessages pids
+    where handleMessages pids = handleMessages =<< P.receive [handleEnd pids]
+          handleEnd pids msg
+            | any (U.isEndForProcessId msg) pids =
+              Just $ do
+                case U.processIdOfSourceId $ P.messageSourceId msg of
+                  Just pid ->
+                    let pids' = S.filter (\pid' -> pid /= pid') pids
+                    in if S.length pids' > 0
+                       then do
+                         liftIO $ threadDelay 10000
+                         nid <- P.myNodeId
+                         liftIO . printf "Shutting down %s\n" $ show nid
+                         P.shutdown' nid
+                         P.quit'
+                         return pids'
+                       else return pids'
+                  Nothing -> return pids
+            | True = Nothing
 
 -- | Listener
 startListener :: NS.SockAddr -> P.Process ()
@@ -119,12 +145,12 @@ startListener address = do
             Nothing -> Nothing
 
 -- | Send and receive messages
-sendReceive :: NS.SockAddr -> Integer -> P.Process ()
-sendReceive address count = do
+sendReceive :: NS.SockAddr -> Integer -> Integer -> P.Process ()
+sendReceive address count remoteCount = do
   myPid <- P.myProcessId
   port <- FP.connect address BS.empty [P.ProcessDest myPid]
   liftIO $ printf "Connecting to port\n"
-  remoteDid <- FP.lookupRemote port repeaterName 2000000
+  remoteDid <- FP.lookupRemote port repeaterGroupName 2000000
   case remoteDid of
     Right remoteDid -> do
       liftIO $ printf "Looked up repeater\n"
@@ -132,15 +158,17 @@ sendReceive address count = do
         FP.send port remoteDid textHeader . U.encode . T.pack $ printf "%d" i
         liftIO . printf  "Sent \"%d\" to %s\n" i $ show port
       FP.send port remoteDid exitHeader BS.empty
-      handleMessages port
+      handleMessages port 0
     Left _ -> do
       liftIO $ printf "Failed to look up name!\n"
       nid <- P.myNodeId
       P.shutdown' nid
       P.quit'
-  where handleMessages port =
-          forever $ P.receive [handleText, handleExit, handleEnd port]
-        handleText msg
+  where handleMessages port exitCount = do
+          exitCount <- P.receive [handleText exitCount, handleExit exitCount,
+                                  handleEnd port exitCount]
+          handleMessages port exitCount
+        handleText exitCount msg
           | U.matchHeader msg textHeader =
             Just $ do
               case U.tryDecodeMessage msg :: Either T.Text T.Text of
@@ -150,20 +178,30 @@ sendReceive address count = do
                       liftIO . printf "Received \"%s\" back from %s\n" text $
                         show sid
                       U.reply msg textHeader $ U.encode text
-                    _ -> return ()
-                _ -> return ()
+                      return exitCount
+                    _ -> return exitCount
+                _ -> return exitCount
           | True = Nothing
-        handleExit msg
+        handleExit exitCount msg
           | U.matchHeader msg exitHeader =
             Just $ do
-              nid <- P.myNodeId
-              liftIO . printf "Shutting down %s\n" $ show nid
-              P.shutdown' nid
-              P.quit'
+              liftIO . printf "Got exit from %s\n" . show $
+                P.messageSourceId msg
+              let exitCount' = exitCount + 1
+              if exitCount' >= remoteCount
+                then do
+                  nid <- P.myNodeId
+                  liftIO . printf "Shutting down %s\n" $ show nid
+                  P.shutdown' nid
+                  P.quit'
+                  return exitCount'
+                else return exitCount'
           | True = Nothing
-        handleEnd port msg
+        handleEnd port exitCount msg
           | FP.isEnd port msg =
-            Just . liftIO . printf "Received end for %s\n" $ show port
+            Just $ do
+              liftIO . printf "Received end for %s\n" $ show port
+              return exitCount
           | True = Nothing
 
 -- | A socket port ring messaging test.
@@ -178,9 +216,9 @@ portMessagingTest = do
           nodes@[node0, node1] <- startNodes addresses BS.empty
           P.spawnInit' (startListener bindAddress) node1
           liftIO $ threadDelay 100000
-          P.spawnInit' (sendReceive bindAddress 50) node0
+          P.spawnInit' (sendReceive bindAddress 50 3) node0
           liftIO $ threadDelay 500000
-          P.spawnInit' repeater node1
+          P.spawnInit' (startRepeaters 3) node1
           waitNodes nodes
         Nothing -> putStrLn "Could not find address"
     _ -> putStrLn "Could not find addresses"

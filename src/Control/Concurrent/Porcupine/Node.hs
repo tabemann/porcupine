@@ -519,15 +519,14 @@ handleLocalAssignMessage name destId new = do
 handleLocalUnassignMessage :: Name -> DestId -> Bool -> NodeM ()
 handleLocalUnassignMessage name destId new = do
   if new
-    then do notifyUnassign name destId
-            names <- liftIO . atomically . readTVar =<<
+    then do names <- liftIO . atomically . readTVar =<<
                      nodeNames . nodeInfo <$> St.get
             case M.lookup name names of
               Just bindings ->
                 case S.viewl bindings of
                   (destId', _) :< _ -> notifyAssign name destId'
-                  _ -> return ()
-              Nothing -> return ()
+                  _ -> notifyUnassign name destId
+              Nothing -> notifyUnassign name destId
     else return ()
   broadcastRemoteMessage $ RemoteUnassignMessage { ruassName = name,
                                                    ruassDestId = destId }
@@ -760,13 +759,12 @@ handleRemoteUnassignMessage _ name did = do
     writeTVar names names''
     if new
       then return $ do
-        notifyUnassign name did
         case M.lookup name names'' of
           Just bindings ->
             case S.viewl bindings of
               (did', _) :< _ -> notifyAssign name did'
-              _ -> return ()
-          Nothing -> return ()
+              _ -> notifyUnassign name did
+          Nothing -> notifyUnassign name did
       else return $ return ()
 
 -- | Handle a remote shutdown message.

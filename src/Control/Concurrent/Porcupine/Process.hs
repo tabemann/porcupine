@@ -54,6 +54,7 @@ module Control.Concurrent.Porcupine.Process
    UserRemoteConnectFailed (..),
    UserRemoteDisconnected (..),
    MessageContainer (..),
+   UserAssignment (..),
    myProcessId,
    myNodeId,
    nodeIdOfProcessId,
@@ -93,6 +94,7 @@ module Control.Concurrent.Porcupine.Process
    sendAnnotatedAsProxy,
    receive,
    tryReceive,
+   receiveWithTimeout,
    subscribe,
    unsubscribe,
    subscribeAsProxy,
@@ -101,6 +103,7 @@ module Control.Concurrent.Porcupine.Process
    unassign,
    tryLookup,
    lookup,
+   lookupAll,
    newGroupId,
    newUniqueId,
    connect,
@@ -131,7 +134,11 @@ import qualified Network.Socket as NS
 import Data.Sequence (ViewL (..))
 import Data.Sequence ((|>))
 import Control.Concurrent (myThreadId,
+                           threadDelay,
                            killThread)
+import Control.Concurrent.Async (Async,
+                                 async,
+                                 cancel)
 import Control.Concurrent.STM (STM,
                                atomically,
                                retry,
@@ -145,9 +152,14 @@ import Control.Concurrent.STM.TQueue (TQueue,
                                       readTQueue,
                                       tryReadTQueue,
                                       writeTQueue)
+import Control.Concurrent.STM.TMVar (TMVar,
+                                     newEmptyTMVar,
+                                     putTMVar,
+                                     readTMVar)
 import qualified Control.Monad.Trans.State.Strict as St
 import qualified Control.Exception.Base as E
 import Data.Functor ((<$>))
+import Data.Foldable (foldl')
 import Control.Monad ((=<<),
                       join)
 import Control.Monad.IO.Class (MonadIO (..))
@@ -596,6 +608,17 @@ lookup name = do
           EmptyL -> retry
       Nothing -> retry
 
+-- | Look up all the names.
+lookupAll :: Process (M.HashMap Name DestId)
+lookupAll = do
+  names <- nodeNames . procNode <$> Process St.get
+  names' <- liftIO . atomically $ readTVar names
+  return $ foldl' (\prevMap (name, entries) ->
+            case S.viewl entries of
+              (did, _) :< _ -> M.insert name did prevMap
+              _ -> prevMap)
+    M.empty (M.toList names')
+
 -- | Generate a new group Id.
 newGroupId :: Process GroupId
 newGroupId = do
@@ -738,6 +761,38 @@ tryReceive options = do
                     writeTVar (procExtra processInfo) $ extra |> message
                   tryMatchThenExecute
             Nothing -> return Nothing
+
+-- | Read messages from the queue with a timeout (in microseconds).
+receiveWithTimeout :: Int -> S.Seq (Handler a) -> Process (Maybe a)
+receiveWithTimeout timeout options = do
+  alreadyReceived <- liftIO . atomically . readTVar . procExtra =<<
+                     Process St.get
+  found <- matchAndExecutePrefound options alreadyReceived
+  case found of
+    Just found -> return $ Just found
+    Nothing -> do
+      timedOut <- liftIO $ atomically newEmptyTMVar
+      waiter <- liftIO . async $ do
+        threadDelay timeout
+        atomically $ putTMVar timedOut ()
+      matchUntilFoundThenExecute timedOut waiter
+  where matchUntilFoundThenExecute timedOut waiter = do
+          processInfo <- Process St.get
+          message <- liftIO . atomically $
+            (Right <$> (readTQueue $ procQueue processInfo)) `orElse`
+            (Left <$> readTMVar timedOut)
+          case message of
+            Right message ->
+              case match options message of
+                Just action -> do
+                  liftIO $ cancel waiter
+                  Just <$> action
+                Nothing -> do
+                  liftIO . atomically $ do
+                    extra <- readTVar $ procExtra processInfo
+                    writeTVar (procExtra processInfo) $ extra |> message
+                  matchUntilFoundThenExecute timedOut waiter
+            Left () -> return Nothing
 
 -- | Attempt to match a list of already-received messages agianst a set of
 -- options, and if one is found, execute the action.

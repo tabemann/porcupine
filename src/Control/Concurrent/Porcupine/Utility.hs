@@ -62,10 +62,15 @@ module Control.Concurrent.Porcupine.Utility
    nodeIdOfSourceId,
    nodeIdOfDestId,
    processIdOfSourceId,
+   uniqueIdTag,
+   proxySourceIdTag,
+   proxyDestIdTag,
    quitHeader,
    endedHeader,
    killedHeader,
    diedHeader,
+   assignedHeader,
+   unassignedHeader,
    remoteConnectFailedHeader,
    remoteDisconnectedHeader,
    encode,
@@ -125,6 +130,14 @@ remoteConnectFailedHeader = encode ("remoteConnectFailed" :: T.Text)
 -- | Remote disconnected header
 remoteDisconnectedHeader :: P.Header
 remoteDisconnectedHeader = encode ("remoteDisconnected" :: T.Text)
+
+-- | Assigned header.
+assignedHeader :: P.Header
+assignedHeader = encode ("assigned" :: T.Text)
+
+-- | Unassigned header.
+unassignedHeader :: P.Header
+unassignedHeader = encode ("unassigned" :: T.Text)
 
 -- | Match a message header.
 matchHeader :: P.Message -> P.Header -> Bool

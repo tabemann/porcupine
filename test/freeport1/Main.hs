@@ -161,8 +161,7 @@ sendReceive address count remoteCount = do
       handleMessages port 0
     Left _ -> do
       liftIO $ printf "Failed to look up name!\n"
-      nid <- P.myNodeId
-      P.shutdown' nid
+      P.shutdown' =<< P.myNodeId
       P.quit'
   where handleMessages port exitCount = do
           exitCount <- P.receive [handleText exitCount, handleExit exitCount,

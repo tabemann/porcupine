@@ -106,7 +106,7 @@ stop (GenericServer pid) =
   P.send (P.ProcessDest pid) genericServerExitHeader BS.empty
 
 -- | Send a message to a generic server.
-send :: GenericServer -> P.Header -> P.Payload -> P.Process ()
+send :: B.Binary a => GenericServer -> P.Header -> a -> P.Process ()
 send (GenericServer pid) header payload =
   P.send (P.ProcessDest pid) header payload
 

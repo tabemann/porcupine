@@ -272,20 +272,20 @@ tryDecodeProxyDestId = (flip tryDecodeAnnotation) proxyDestIdTag
 processIdOfMessage = processIdOfSourceId . P.messageSourceId
 
 -- | Send a message with a unique Id.
-sendWithUniqueId :: P.DestId -> P.UniqueId -> P.Header -> P.Payload ->
+sendWithUniqueId :: B.Binary a => P.DestId -> P.UniqueId -> P.Header -> a ->
                     P.Process ()
 sendWithUniqueId did uid header payload =
   P.sendAnnotated did header payload [P.Annotation uniqueIdTag $ encode uid]
 
 -- | Send a message as a proxy with a unique Id.
-sendWithUniqueIdAsProxy :: P.DestId -> P.SourceId -> P.UniqueId -> P.Header ->
-                           P.Payload -> P.Process ()
+sendWithUniqueIdAsProxy :: B.Binary a => P.DestId -> P.SourceId ->
+                           P.UniqueId -> P.Header -> a -> P.Process ()
 sendWithUniqueIdAsProxy did sid uid header payload =
   P.sendAnnotatedAsProxy did sid header payload
     [P.Annotation uniqueIdTag $ encode uid]
 
 -- | Reply to a message.
-reply :: P.Message -> P.Header -> P.Payload -> P.Process ()
+reply :: B.Binary a => P.Message -> P.Header -> a -> P.Process ()
 reply msg header payload = do
   let uniqueIdAnnotation =
         case tryDecodeUniqueId msg of

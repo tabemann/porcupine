@@ -203,49 +203,49 @@ unlisten (SocketListener pid) = P.kill' $ P.ProcessDest pid
 -- | Register on a socket port.
 registerPort :: SocketPort -> P.DestId -> P.Process ()
 registerPort (SocketPort pid) did =
-  P.send (P.ProcessDest pid) socketPortRegisterHeader $ U.encode did
+  P.send (P.ProcessDest pid) socketPortRegisterHeader did
 
 -- | Unregister on a socket port.
 unregisterPort :: SocketPort -> P.DestId -> P.Process ()
 unregisterPort (SocketPort pid) did =
-  P.send (P.ProcessDest pid) socketPortUnregisterHeader $ U.encode did
+  P.send (P.ProcessDest pid) socketPortUnregisterHeader did
 
 -- | Register on a socket listener.
 registerListener :: SocketListener -> P.DestId -> P.Process ()
 registerListener (SocketListener pid) did =
-  P.send (P.ProcessDest pid) socketListenerRegisterHeader $ U.encode did
+  P.send (P.ProcessDest pid) socketListenerRegisterHeader did
 
 -- | Unregister on a socket listener.
 unregisterListener :: SocketListener -> P.DestId -> P.Process ()
 unregisterListener (SocketListener pid) did =
-  P.send (P.ProcessDest pid) socketListenerUnregisterHeader $ U.encode did
+  P.send (P.ProcessDest pid) socketListenerUnregisterHeader did
 
 -- | Add auto-registration for a socket listener.
 addAutoRegister :: SocketListener -> P.DestId -> P.Process ()
 addAutoRegister (SocketListener pid) did =
-  P.send (P.ProcessDest pid) addAutoRegisterHeader $ U.encode did
+  P.send (P.ProcessDest pid) addAutoRegisterHeader did
 
 -- | Remove auto-registration for a socket listener.
 removeAutoRegister :: SocketListener -> P.DestId -> P.Process ()
 removeAutoRegister (SocketListener pid) did =
-  P.send (P.ProcessDest pid) removeAutoRegisterHeader $ U.encode did
+  P.send (P.ProcessDest pid) removeAutoRegisterHeader did
 
 -- | Add auto-end listening for a socket listener.
 addAutoEndListener :: SocketListener -> P.DestId -> P.Process ()
 addAutoEndListener (SocketListener pid) did =
-  P.send (P.ProcessDest pid) addAutoEndListenerHeader $ U.encode did
+  P.send (P.ProcessDest pid) addAutoEndListenerHeader did
 
 -- | Remove auto-end listening for a socket listener.
 removeAutoEndListener :: SocketListener -> P.DestId -> P.Process ()
 removeAutoEndListener (SocketListener pid) did =
-  P.send (P.ProcessDest pid) removeAutoEndListenerHeader $ U.encode did
+  P.send (P.ProcessDest pid) removeAutoEndListenerHeader did
 
 -- | Send a message to a socket port.
-send :: SocketPort -> P.Header -> P.Payload -> P.Process ()
+send :: B.Binary a => SocketPort -> P.Header -> a -> P.Process ()
 send (SocketPort pid) header payload = P.send (P.ProcessDest pid) header payload
 
 -- | Send a message to a socket port with a uniqueId.
-sendWithUniqueId :: SocketPort -> P.UniqueId -> P.Header -> P.Payload ->
+sendWithUniqueId :: B.Binary a => SocketPort -> P.UniqueId -> P.Header -> a ->
                     P.Process ()
 sendWithUniqueId (SocketPort pid) uid header payload =
   U.sendWithUniqueId (P.ProcessDest pid) uid header payload
@@ -441,7 +441,7 @@ runListenProcess parentPid socket key = do
   childPid <- P.spawnListenEnd' (startSocketPort socket' key
                                  (asrAutoRegister response))
               (asrAutoEndListeners response)
-  P.send (P.ProcessDest parentPid) acceptedHeader $ U.encode childPid
+  P.send (P.ProcessDest parentPid) acceptedHeader childPid
   runListenProcess parentPid socket key
 
 -- | Run the parent listener process.
@@ -556,7 +556,7 @@ handleAutoSetupRequest state msg
                                            slsAutoRegister state,
                                          asrAutoEndListeners =
                                            slsAutoEndListeners state }
-      U.reply msg autoSetupResponseHeader $ U.encode response
+      U.reply msg autoSetupResponseHeader response
       logMessage "Sent auto setup response to listen process\n"
       return state
   | True = Nothing
@@ -570,7 +570,7 @@ handleAccepted state msg
       Right _ ->
         Just $ do
           forM_ (M.keys $ slsRegistered state) $ \did ->
-            P.send did acceptedHeader $ P.messagePayload msg
+            P.sendRaw did acceptedHeader $ P.messagePayload msg
           return state
       Left _ -> Just $ return state
   | True = Nothing
@@ -675,7 +675,7 @@ handleIncoming state msg
       case U.tryDecodeMessage msg of
         Right container -> do
           forM_ (M.keys $ spsRegistered state) $ \did -> do
-            P.sendAnnotated did (P.mcontHeader container)
+            P.sendRawAnnotated did (P.mcontHeader container)
               (P.mcontPayload container) (P.mcontAnnotations container)
           return state
         Left _ -> return state
@@ -691,7 +691,7 @@ handleOutgoing state msg
         if not $ spsSendStopped state
           then do
             let payload' =
-                  U.encode $ P.MessageContainer (P.messageHeader msg)
+                  P.MessageContainer (P.messageHeader msg)
                   (P.messagePayload msg) (P.messageAnnotations msg)
             P.send (P.ProcessDest $ spsSendPid state) sendRemoteHeader
               payload'
@@ -777,7 +777,7 @@ runReceiveProcess parentPid socket buffer = do
         Left _ -> do
           logMessage "Failed to decode message container\n"
           P.quit'
-        Right _ -> do
+        Right message -> do
           P.send (P.ProcessDest parentPid) receiveRemoteHeader message
           runReceiveProcess parentPid socket rest
   

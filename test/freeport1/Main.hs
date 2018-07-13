@@ -90,7 +90,7 @@ repeater = do
                     Right (Just sid) -> do
                       liftIO . printf "Received \"%s\" from %s\n" text $
                         show sid
-                      U.reply msg textHeader $ U.encode text
+                      U.reply msg textHeader text
                     _ -> return ()
                 _ -> return ()
           | True = Nothing
@@ -155,7 +155,7 @@ sendReceive address count remoteCount = do
     Right remoteDid -> do
       liftIO $ printf "Looked up repeater\n"
       forM_ ([0..count - 1] :: [Integer]) $ \i -> do
-        FP.send port remoteDid textHeader . U.encode . T.pack $ printf "%d" i
+        FP.send port remoteDid textHeader . T.pack $ printf "%d" i
         liftIO . printf  "Sent \"%d\" to %s\n" i $ show port
       FP.send port remoteDid exitHeader BS.empty
       handleMessages port 0
@@ -176,7 +176,7 @@ sendReceive address count remoteCount = do
                     Right (Just sid) -> do
                       liftIO . printf "Received \"%s\" back from %s\n" text $
                         show sid
-                      U.reply msg textHeader $ U.encode text
+                      U.reply msg textHeader text
                       return exitCount
                     _ -> return exitCount
                 _ -> return exitCount

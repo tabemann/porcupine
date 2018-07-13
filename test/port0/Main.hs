@@ -139,7 +139,7 @@ sender sockAddr count = do
     [P.ProcessDest monitorPid]
   liftIO $ printf "Socket port has been started...\n"
   forM_ ([0..count - 1] :: [Integer]) $ \index -> do
-    SP.send port textHeader . U.encode . T.pack $ printf "%d" index
+    SP.send port textHeader . T.pack $ printf "%d" index
     liftIO $ printf "Sending: %d\n" index
   liftIO $ printf "Shutting down socket port...\n"
   SP.disconnect port

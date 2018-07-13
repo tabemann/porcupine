@@ -238,32 +238,32 @@ unlisten (SocketListener pid) = P.kill' $ P.ProcessDest pid
 -- | Register on a socket listener.
 registerListener :: SocketListener -> P.DestId -> P.Process ()
 registerListener (SocketListener pid) did =
-  P.send (P.ProcessDest pid) socketListenerRegisterHeader $ U.encode did
+  P.send (P.ProcessDest pid) socketListenerRegisterHeader did
 
 -- | Unregister on a socket listener.
 unregisterListener :: SocketListener -> P.DestId -> P.Process ()
 unregisterListener (SocketListener pid) did =
-  P.send (P.ProcessDest pid) socketListenerUnregisterHeader $ U.encode did
+  P.send (P.ProcessDest pid) socketListenerUnregisterHeader did
 
 -- | Add auto-end listening for a socket listener.
 addAutoEndListener :: SocketListener -> P.DestId -> P.Process ()
 addAutoEndListener (SocketListener pid) did =
-  P.send (P.ProcessDest pid) addAutoEndListenerHeader $ U.encode did
+  P.send (P.ProcessDest pid) addAutoEndListenerHeader did
 
 -- | Remove auto-end listening for a socket listener.
 removeAutoEndListener :: SocketListener -> P.DestId -> P.Process ()
 removeAutoEndListener (SocketListener pid) did =
-  P.send (P.ProcessDest pid) removeAutoEndListenerHeader $ U.encode did
+  P.send (P.ProcessDest pid) removeAutoEndListenerHeader did
 
 -- | Send a message to a socket port.
-send :: SocketPort -> P.DestId -> P.Header -> P.Payload -> P.Process ()
+send :: B.Binary a => SocketPort -> P.DestId -> P.Header -> a -> P.Process ()
 send (SocketPort pid) did header payload =
   let annotation = [P.Annotation U.proxyDestIdTag $ U.encode did]
   in P.sendAnnotated (P.ProcessDest pid) header payload annotation
 
 -- | Send a message to a socket port with a unique Id.
-sendWithUniqueId :: SocketPort -> P.DestId -> P.UniqueId -> P.Header ->
-                    P.Payload -> P.Process ()
+sendWithUniqueId :: B.Binary a => SocketPort -> P.DestId -> P.UniqueId ->
+                    P.Header -> a -> P.Process ()
 sendWithUniqueId (SocketPort pid) did uid header payload =
   let annotation = [P.Annotation U.proxyDestIdTag $ U.encode did,
                     P.Annotation U.uniqueIdTag $ U.encode uid]
@@ -324,7 +324,7 @@ lookupRemote :: SocketPort -> P.Name -> Int ->
                 P.Process (Either T.Text P.DestId)
 lookupRemote (SocketPort pid) name timeout = do
   uid <- P.newUniqueId
-  U.sendWithUniqueId (P.ProcessDest pid) uid lookupRemoteHeader $ U.encode name
+  U.sendWithUniqueId (P.ProcessDest pid) uid lookupRemoteHeader name
   maybeDid <- P.receiveWithTimeout timeout
     [\msg -> if U.matchHeaderAndUniqueId msg remoteAssignmentHeader uid
              then case U.tryDecodeMessage msg of
@@ -341,8 +341,7 @@ tryLookupRemote :: SocketPort -> P.Name -> Int ->
                    P.Process (Either T.Text (Maybe P.DestId))
 tryLookupRemote (SocketPort pid) name timeout = do
   uid <- P.newUniqueId
-  U.sendWithUniqueId (P.ProcessDest pid) uid tryLookupRemoteHeader $
-    U.encode name
+  U.sendWithUniqueId (P.ProcessDest pid) uid tryLookupRemoteHeader name
   maybeDid <- P.receiveWithTimeout timeout
     [\msg -> if U.matchHeaderAndUniqueId msg remoteAssignmentHeader uid
              then case U.tryDecodeMessage msg of
@@ -363,15 +362,14 @@ tryLookupRemote (SocketPort pid) name timeout = do
 asyncLookupRemote :: SocketPort -> P.Name -> P.Process AsyncLookupRemote
 asyncLookupRemote (SocketPort pid) name = do
   uid <- P.newUniqueId
-  U.sendWithUniqueId (P.ProcessDest pid) uid lookupRemoteHeader $ U.encode name
+  U.sendWithUniqueId (P.ProcessDest pid) uid lookupRemoteHeader name
   return $ AsyncLookupRemote uid
 
 -- | Attempt to look up a remote name asynchronously.
 asyncTryLookupRemote :: SocketPort -> P.Name -> P.Process AsyncLookupRemote
 asyncTryLookupRemote (SocketPort pid) name = do
   uid <- P.newUniqueId
-  U.sendWithUniqueId (P.ProcessDest pid) uid tryLookupRemoteHeader $
-    U.encode name
+  U.sendWithUniqueId (P.ProcessDest pid) uid tryLookupRemoteHeader name
   return $ AsyncLookupRemote uid
 
 -- | Get whether a socket port has ended.
@@ -514,7 +512,7 @@ runListenProcess parentPid socket key = do
   logMessage "Got auto setup response from parent process\n"
   childPid <- P.spawnListenEnd' (startSocketPort socket' key)
               (asrAutoEndListeners response)
-  P.send (P.ProcessDest parentPid) acceptedHeader $ U.encode childPid
+  P.send (P.ProcessDest parentPid) acceptedHeader childPid
   runListenProcess parentPid socket key
 
 -- | Run the parent listener process.
@@ -599,7 +597,7 @@ handleAutoSetupRequest state msg
     Just $ do
       let response = AutoSetupResponse { asrAutoEndListeners =
                                            slsAutoEndListeners state }
-      U.reply msg autoSetupResponseHeader $ U.encode response
+      U.reply msg autoSetupResponseHeader response
       logMessage "Sent auto setup response to listen process\n"
       return state
   | True = Nothing
@@ -613,7 +611,7 @@ handleAccepted state msg
       Right _ ->
         Just $ do
           forM_ (M.keys $ slsRegistered state) $ \did ->
-            P.send did acceptedHeader $ P.messagePayload msg
+            P.sendRaw did acceptedHeader $ P.messagePayload msg
           return state
       Left _ -> Just $ return state
   | True = Nothing
@@ -679,8 +677,8 @@ handleLookupRemote state msg
         Right name ->
           case M.lookup name $ spsAssignment state of
             Just did -> do
-              let payload = U.encode $ P.UserAssignment { usasName = name,
-                                                          usasDestId = did }
+              let payload = P.UserAssignment { usasName = name,
+                                               usasDestId = did }
               U.reply msg remoteAssignmentHeader payload
               return state
             Nothing ->
@@ -708,12 +706,12 @@ handleTryLookupRemote state msg
         Right name ->
           case M.lookup name $ spsAssignment state of
             Just did -> do
-              let payload = U.encode $ P.UserAssignment { usasName = name,
-                                                          usasDestId = did }
+              let payload = P.UserAssignment { usasName = name,
+                                               usasDestId = did }
               U.reply msg remoteAssignmentHeader payload
               return state
             Nothing -> do
-              U.reply msg noRemoteAssignmentHeader $ U.encode name
+              U.reply msg noRemoteAssignmentHeader name
               return state
         Left _ -> return state
   | True = Nothing
@@ -735,7 +733,7 @@ handleIncoming state msg
                   let newAnnotations =
                         unsetAnnotation (P.mcontAnnotations container)
                         U.proxyDestIdTag
-                  in P.sendAnnotated did (P.mcontHeader container)
+                  in P.sendRawAnnotated did (P.mcontHeader container)
                      (P.mcontPayload container) newAnnotations
                 Left _ -> logMessage "Failed to decode proxy destination Id\n"
             Nothing -> logMessage "Failed to find proxy destination Id\n"
@@ -749,7 +747,7 @@ handleIncoming state msg
               then do
                 logMessage . printf "Fulfilling remote lookup for %s\n" $
                   show uid
-                let payload = U.encode $ P.UserAssignment name destId
+                let payload = P.UserAssignment name destId
                 U.sendWithUniqueId destId' uid remoteAssignmentHeader payload
                 return S.empty
               else return $ S.singleton item
@@ -802,7 +800,7 @@ handleOutgoing state msg
                          setAnnotation (P.messageAnnotations msg)
                          U.proxySourceIdTag (U.encode $ P.messageSourceId msg)
                        payload =
-                         U.encode $ P.MessageContainer (P.messageHeader msg)
+                         P.MessageContainer (P.messageHeader msg)
                          (P.messagePayload msg) annotations
                    P.send (P.ProcessDest $ spsSendPid state) sendRemoteHeader
                      payload
@@ -925,7 +923,7 @@ runReceiveProcess parentPid socket buffer = do
         Left _ -> do
           logMessage "Failed to decode socket message\n"
           P.quit'
-        Right _ -> do
+        Right message -> do
           P.send (P.ProcessDest parentPid) receiveRemoteHeader message
           runReceiveProcess parentPid socket rest
   

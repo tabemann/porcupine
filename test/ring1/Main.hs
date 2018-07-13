@@ -88,8 +88,7 @@ ringRepeater myName nextName = do
                                 Just $ do
                                   liftIO $ printf "Got text: %s\n"
                                     (text :: T.Text)
-                                  P.send did (P.messageHeader msg)
-                                    (P.messagePayload msg)
+                                  P.send did textHeader text
                               Left errorText -> error $ T.unpack errorText
                        else if U.matchHeader msg exitHeader
                        then Just $ do
@@ -119,13 +118,9 @@ ringSender myName names addresses count = do
   case S.viewl dids of
     nextDid :< _ -> do
       forM_ ([0..count - 1] :: S.Seq Int) $ \i -> do
-        let header = textHeader
-            payload = U.encode . T.pack $ printf "%d" i
-        P.send nextDid header payload
+        P.send nextDid textHeader . T.pack $ printf "%d" i
         liftIO $ printf "Sent %d\n" i
-      let header = exitHeader
-          payload = BS.empty
-      P.send nextDid header payload
+      P.send nextDid exitHeader BS.empty
       liftIO $ printf "Sent exit\n"
       let nids = foldl' (\prev did ->
                            case U.nodeIdOfDestId did of

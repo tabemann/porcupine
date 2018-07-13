@@ -118,7 +118,7 @@ handleRepeaterTextMessage msg
         Just $ do
           liftIO $ printf "Received text for %s: %s\n"
             (show $ P.messageSourceId msg) text
-          U.reply msg textHeader $ U.encode text
+          U.reply msg textHeader text
       Left _ -> Just $ return ()
   | True = Nothing
 
@@ -142,7 +142,7 @@ sendReceive sockAddr count = do
   port <- SP.connect sockAddr (P.makeKey BS.empty) [P.ProcessDest receiverPid]
           [P.ProcessDest receiverPid]
   forM ([0..count - 1] :: [Integer]) $ \i -> do
-    SP.send port textHeader . U.encode . T.pack $ printf "%d" i
+    SP.send port textHeader . T.pack $ printf "%d" i
     liftIO $ printf "Sending: %d\n" i
   SP.send port exitHeader BS.empty
 

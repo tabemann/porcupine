@@ -92,7 +92,7 @@ ringRepeater count = do
                        Right text ->
                          Just $ do
                            liftIO $ printf "Got text: %s\n" text
-                           U.reply msg textHeader $ P.messagePayload msg
+                           U.reply msg textHeader text
                        Left errorText -> error $ T.unpack errorText
                 else Nothing]
           if count > 1
@@ -109,10 +109,10 @@ ringSender address pid count = do
   liftIO . printf "Listening for process %s termination...\n" $ show pid
   P.listenEnd $ P.ProcessDest pid
   myPid <- P.myProcessId
-  P.send (P.ProcessDest pid) otherProcessHeader $ U.encode myPid
+  P.send (P.ProcessDest pid) otherProcessHeader myPid
   uids <- forM ([0..count - 1] :: S.Seq Integer) $ \i -> do
     uid <- P.newUniqueId
-    U.sendWithUniqueId (P.ProcessDest pid) uid textHeader . U.encode . T.pack $
+    U.sendWithUniqueId (P.ProcessDest pid) uid textHeader . T.pack $
       printf "%d" i
     liftIO $ printf "Sent: %d\n" i
     return uid

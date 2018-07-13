@@ -97,15 +97,15 @@ import Prelude hiding (fail)
 
 -- | Unique Id tag
 uniqueIdTag :: P.AnnotationTag
-uniqueIdTag = encode ("uniqueId" :: T.Text)
+uniqueIdTag = P.makeTag ("uniqueId" :: T.Text)
 
 -- | Proxy source Id tag
 proxySourceIdTag :: P.AnnotationTag
-proxySourceIdTag = encode ("proxySourceId" :: T.Text)
+proxySourceIdTag = P.makeTag ("proxySourceId" :: T.Text)
 
 -- | Proxy destination Id tag
 proxyDestIdTag :: P.AnnotationTag
-proxyDestIdTag = encode ("proxyDestId" :: T.Text)
+proxyDestIdTag = P.makeTag ("proxyDestId" :: T.Text)
 
 -- | Quit header
 quitHeader :: P.Header

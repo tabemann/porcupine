@@ -65,6 +65,7 @@ module Control.Concurrent.Porcupine.Process
    messageAnnotations,
    makeHeader,
    makeName,
+   makeTag,
    spawnInit,
    spawnInitAnnotated,
    spawnInit',
@@ -206,6 +207,10 @@ makeHeader = Header . encode
 -- | Make a name
 makeName :: B.Binary a => a -> Name
 makeName = Name . encode
+
+-- | Make an annotation tag
+makeTag :: B.Binary a => a -> AnnotationTag
+makeTag = AnnotationTag . encode
 
 -- | Empty header
 emptyHeader :: Header

@@ -134,9 +134,9 @@ simpleMessagingTest = do
       case address1 of
         Just address1 -> do
           putStrLn "Starting node 0..."
-          node0 <- PN.start 0 (Just address0) BS.empty
+          node0 <- PN.start 0 (Just address0) (P.makeKey BS.empty)
           putStrLn "Starting node 1..."
-          node1 <- PN.start 1 (Just address1) BS.empty
+          node1 <- PN.start 1 (Just address1) (P.makeKey BS.empty)
           putStrLn "Starting receiver process 0..."
           receiverPid0 <- P.spawnInit' (simpleMessageReceiver 0 True) node0
           putStrLn "Starting receiver processs 1..."

@@ -39,7 +39,7 @@ module Control.Concurrent.Porcupine.Private.Types
    Header (..),
    Payload,
    Name (..),
-   Key,
+   Key (..),
    AnnotationTag (..),
    AnnotationValue,
    Annotation (..),
@@ -135,7 +135,8 @@ newtype Name = Name ByteString
              deriving (Eq, Ord, Binary, Hashable)
 
 -- | The key type
-type Key = ByteString
+newtype Key = Key ByteString
+            deriving (Eq, Ord, Binary, Hashable)
 
 -- | The annotation key type
 newtype AnnotationTag = AnnotationTag ByteString

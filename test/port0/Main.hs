@@ -79,8 +79,8 @@ receiver :: NS.SockAddr -> Integer -> P.Process ()
 receiver sockAddr count = do
   myDestId <- P.ProcessDest <$> P.myProcessId
   liftIO $ printf "Starting listening...\n"
-  listener <- SP.listen sockAddr BS.empty [myDestId] [myDestId] [myDestId]
-              [myDestId]
+  listener <- SP.listen sockAddr (P.makeKey BS.empty) [myDestId] [myDestId]
+              [myDestId] [myDestId]
   liftIO $ printf "Listener has been started...\n";
   receiverLoop $ ReceiverState { recvPortEndCount = 0,
                                  recvListenerEnded = False,
@@ -135,7 +135,7 @@ sender sockAddr count = do
   myPid <- P.myProcessId
   monitorPid <- P.spawn' monitor
   liftIO $ printf "Connecting to port...\n"
-  port <- SP.connect sockAddr BS.empty [P.ProcessDest myPid]
+  port <- SP.connect sockAddr (P.makeKey BS.empty) [P.ProcessDest myPid]
     [P.ProcessDest monitorPid]
   liftIO $ printf "Socket port has been started...\n"
   forM_ ([0..count - 1] :: [Integer]) $ \index -> do
@@ -167,7 +167,8 @@ portMessagingTest = do
       bindAddress <- getSockAddr 7770
       case bindAddress of
         Just bindAddress -> do
-          nodes@[node0, node1, node2, node3] <- startNodes addresses BS.empty
+          nodes@[node0, node1, node2, node3] <-
+            startNodes addresses (P.makeKey BS.empty)
           P.spawnInit' (receiver bindAddress 3) node0
           liftIO $ threadDelay 100000
           P.spawnInit' (sender bindAddress 50) node1
@@ -178,7 +179,7 @@ portMessagingTest = do
     _ -> putStrLn "Could not find addresses"
             
 -- | Start nodes at addresses.
-startNodes :: Foldable t => t NS.SockAddr -> BS.ByteString -> IO (S.Seq PN.Node)
+startNodes :: Foldable t => t NS.SockAddr -> P.Key -> IO (S.Seq PN.Node)
 startNodes addresses key = do
   (_, nodes) <- foldM startNode (0, S.empty) addresses
   return nodes

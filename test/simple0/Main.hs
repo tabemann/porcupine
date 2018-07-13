@@ -116,7 +116,7 @@ simpleMessageSender pid = do
 simpleMessagingTest :: IO ()
 simpleMessagingTest = do
   putStrLn "Starting the node..."
-  node <- PN.start 0 Nothing BS.empty
+  node <- PN.start 0 Nothing (P.makeKey BS.empty)
   putStrLn "Starting the receiver process..."
   receiverPid <- P.spawnInit' simpleMessageReceiver node
   putStrLn "Starting the sender process..."

@@ -150,9 +150,9 @@ ringMessagingTest = do
       case address1 of
         Just address1 -> do
           putStrLn "Starting node 0..."
-          node0 <- PN.start 0 (Just address0) BS.empty
+          node0 <- PN.start 0 (Just address0) (P.makeKey BS.empty)
           putStrLn "Starting node 1..."
-          node1 <- PN.start 1 (Just address1) BS.empty
+          node1 <- PN.start 1 (Just address1) (P.makeKey BS.empty)
           repeaterPid <- P.spawnInit' (ringRepeater 50) node0
           P.spawnInit' (ringSender address0 repeaterPid 100) node1
           PN.waitShutdown node0

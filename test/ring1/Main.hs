@@ -174,7 +174,8 @@ ringMessagingTest = do
   addresses <- getAddresses ([6660..6663] :: S.Seq Word16)
   case addresses of
     Just addresses@[address0, address1, address2, address3] -> do
-      nodes@[node0, node1, node2, node3] <- startNodes addresses BS.empty
+      nodes@[node0, node1, node2, node3] <-
+        startNodes addresses (P.makeKey BS.empty)
       P.spawnInit' (ringSender "main" ["repeater1", "repeater2", "repeater3"]
                     (S.drop 1 addresses) 100)
         node0
@@ -185,7 +186,7 @@ ringMessagingTest = do
     _ -> putStrLn "Could not find addresses"
             
 -- | Start nodes at addresses.
-startNodes :: Foldable t => t NS.SockAddr -> BS.ByteString -> IO (S.Seq PN.Node)
+startNodes :: Foldable t => t NS.SockAddr -> P.Key -> IO (S.Seq PN.Node)
 startNodes addresses key = do
   (_, nodes) <- foldM startNode (0, S.empty) addresses
   return nodes

@@ -124,9 +124,9 @@ simpleMessageSender pid0 pid1 node = do
 -- | Yet another simple messaging test.
 simpleMessagingTest = do
   putStrLn "Starting node 0..."
-  node0 <- PN.start 0 Nothing BS.empty
+  node0 <- PN.start 0 Nothing (P.makeKey BS.empty)
   putStrLn "Starting node 1..."
-  node1 <- PN.start 1 Nothing BS.empty
+  node1 <- PN.start 1 Nothing (P.makeKey BS.empty)
   putStrLn "Starting receiver process 0..."
   receiverPid0 <- P.spawnInit' simpleMessageReceiver node0
   putStrLn "Starting receiver processs 1..."

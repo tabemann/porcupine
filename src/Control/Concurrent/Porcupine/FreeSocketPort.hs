@@ -56,8 +56,6 @@ module Control.Concurrent.Porcupine.FreeSocketPort
    listenEndAsProxy,
    unlistenEnd,
    unlistenEndAsProxy,
-   portListenEnd,
-   portUnlistenEnd,
    lookupRemote,
    tryLookupRemote,
    asyncLookupRemote,
@@ -320,16 +318,6 @@ unlistenEnd (SocketPort pid) = P.unlistenEnd $ P.ProcessDest pid
 unlistenEndAsProxy :: SocketPort -> P.DestId -> P.Process ()
 unlistenEndAsProxy (SocketPort pid) did =
   P.unlistenEndAsProxy (P.ProcessDest pid) did
-
--- | Set a socket port to listen for process end.
-portListenEnd :: P.DestId -> SocketPort -> P.Process ()
-portListenEnd listenedId (SocketPort pid) =
-  P.listenEndAsProxy listenedId $ P.ProcessDest pid
-
--- | Set a socket port to not listen for process end.
-portUnlistenEnd :: P.DestId -> SocketPort -> P.Process ()
-portUnlistenEnd listenedId (SocketPort pid) =
-  P.unlistenEndAsProxy listenedId $ P.ProcessDest pid
 
 -- | Look up a remote name with a timeout (in microseconds).
 lookupRemote :: SocketPort -> P.Name -> Int ->
@@ -977,71 +965,72 @@ word64Size = fromIntegral . BS.length $ U.encode (0 :: Word64)
 
 -- | Socket port register header
 socketPortRegisterHeader :: P.Header
-socketPortRegisterHeader = U.encode ("socketPortRegister" :: T.Text)
+socketPortRegisterHeader = P.makeHeader ("socketPortRegister" :: T.Text)
 
 -- | Socket port unregister header
 socketPortUnregisterHeader :: P.Header
-socketPortUnregisterHeader = U.encode ("socketPortUnregister" :: T.Text)
+socketPortUnregisterHeader = P.makeHeader ("socketPortUnregister" :: T.Text)
 
 -- | Socket listener register header
 socketListenerRegisterHeader :: P.Header
-socketListenerRegisterHeader = U.encode ("socketListenerRegister" :: T.Text)
+socketListenerRegisterHeader = P.makeHeader ("socketListenerRegister" :: T.Text)
 
 -- | Socket listener unregister header
 socketListenerUnregisterHeader :: P.Header
-socketListenerUnregisterHeader = U.encode ("socketListenerUnregister" :: T.Text)
+socketListenerUnregisterHeader =
+  P.makeHeader ("socketListenerUnregister" :: T.Text)
 
 -- | Socket listener add auto register
 addAutoRegisterHeader :: P.Header
-addAutoRegisterHeader = U.encode ("addAutoRegister" :: T.Text)
+addAutoRegisterHeader = P.makeHeader ("addAutoRegister" :: T.Text)
 
 -- | Socket listener remove auto register
 removeAutoRegisterHeader :: P.Header
-removeAutoRegisterHeader = U.encode ("removeAutoRegister" :: T.Text)
+removeAutoRegisterHeader = P.makeHeader ("removeAutoRegister" :: T.Text)
 
 -- | Socket listener add auto end listener
 addAutoEndListenerHeader :: P.Header
-addAutoEndListenerHeader = U.encode ("addAutoEndListener" :: T.Text)
+addAutoEndListenerHeader = P.makeHeader ("addAutoEndListener" :: T.Text)
 
 -- | Socket listener remove auto end listener
 removeAutoEndListenerHeader :: P.Header
-removeAutoEndListenerHeader = U.encode ("removeAutoEndListener" :: T.Text)
+removeAutoEndListenerHeader = P.makeHeader ("removeAutoEndListener" :: T.Text)
 
 -- | Send remote header
 sendRemoteHeader :: P.Header
-sendRemoteHeader = U.encode ("sendRemote" :: T.Text)
+sendRemoteHeader = P.makeHeader ("sendRemote" :: T.Text)
 
 -- | Receive remote header
 receiveRemoteHeader :: P.Header
-receiveRemoteHeader = U.encode ("receiveRemote" :: T.Text)
+receiveRemoteHeader = P.makeHeader ("receiveRemote" :: T.Text)
 
 -- | Auto setup request header
 autoSetupRequestHeader :: P.Header
-autoSetupRequestHeader = U.encode ("autoSetupRequest" :: T.Text)
+autoSetupRequestHeader = P.makeHeader ("autoSetupRequest" :: T.Text)
 
 -- | Auto setup response header
 autoSetupResponseHeader :: P.Header
-autoSetupResponseHeader = U.encode ("autoSetupResponse" :: T.Text)
+autoSetupResponseHeader = P.makeHeader ("autoSetupResponse" :: T.Text)
 
 -- | Accepted connection header
 acceptedHeader :: P.Header
-acceptedHeader = U.encode ("accepted" :: T.Text)
+acceptedHeader = P.makeHeader ("accepted" :: T.Text)
 
 -- | Look up a remote assignment header
 lookupRemoteHeader :: P.Header
-lookupRemoteHeader = U.encode ("lookupRemote" :: T.Text)
+lookupRemoteHeader = P.makeHeader ("lookupRemote" :: T.Text)
 
 -- | Try to look up a remote assignment header
 tryLookupRemoteHeader :: P.Header
-tryLookupRemoteHeader = U.encode ("tryLookupRemote" :: T.Text)
+tryLookupRemoteHeader = P.makeHeader ("tryLookupRemote" :: T.Text)
 
 -- | Found remote assignment header
 remoteAssignmentHeader :: P.Header
-remoteAssignmentHeader = U.encode ("remoteAssignment" :: T.Text)
+remoteAssignmentHeader = P.makeHeader ("remoteAssignment" :: T.Text)
 
 -- | Failed to find remote assignment header
 noRemoteAssignmentHeader :: P.Header
-noRemoteAssignmentHeader = U.encode ("noRemoteAssignment" :: T.Text)
+noRemoteAssignmentHeader = P.makeHeader ("noRemoteAssignment" :: T.Text)
 
 -- | Handle closing a socket after handling an exception
 handleSocket :: NS.Socket -> P.Process a -> P.Process a

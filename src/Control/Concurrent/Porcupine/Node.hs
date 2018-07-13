@@ -343,7 +343,7 @@ handleRemoteConnected nid socket buffer = do
 handleRemoteConnectFailed :: PartialNodeId -> NodeM ()
 handleRemoteConnectFailed pnid = do
   pnodes <- nodePendingRemoteNodes <$> St.get
-  let header = encode ("remoteConnectFailed" :: T.Text)
+  let header = remoteConnectFailedHeader
       payload = encode $ UserRemoteConnectFailed { urcfNodeId = pnid }
   forM_ pnodes $ \pnode ->
     if prnodeId pnode == pnid
@@ -356,11 +356,15 @@ handleRemoteConnectFailed pnid = do
               S.filter (\pnode -> prnodeId pnode /= pnid) $
               nodePendingRemoteNodes state }
 
+-- | Remote connect failed header
+remoteConnectFailedHeader :: Header
+remoteConnectFailedHeader = Header $ encode ("remoteConnectFailed" :: T.Text)
+
 -- | Handle a remote disconnected event.
 handleRemoteDisconnected :: NodeId -> NodeM ()
 handleRemoteDisconnected nid = do
   rnodes <- nodeRemoteNodes <$> St.get
-  let header = encode ("remoteDisconnected" :: T.Text)
+  let header = remoteDisconnectedHeader
       payload = encode $ UserRemoteDisconnected  { urdcNodeId = nid }
   case M.lookup nid rnodes of
     Just rnode -> do
@@ -371,6 +375,10 @@ handleRemoteDisconnected nid = do
       St.modify $ \state ->
         state { nodeRemoteNodes = M.delete nid $ nodeRemoteNodes state }
     Nothing -> return ()
+
+-- | Remote disconnected header
+remoteDisconnectedHeader :: Header
+remoteDisconnectedHeader = Header $ encode ("remoteDisconnected" :: T.Text)
 
 -- | Handle a local user message.
 handleLocalUserMessage :: Message -> NodeM ()
@@ -429,8 +437,8 @@ handleLocalQuitMessage pid header payload = do
     pid
 
 -- | Quit header
-quitHeader' :: BS.ByteString
-quitHeader' = encode ("quit" :: T.Text)
+quitHeader' :: Header
+quitHeader' = Header $ encode ("quit" :: T.Text)
 
 -- | Handle a local end message.
 handleLocalEndMessage :: ProcessId -> Maybe SomeException -> NodeM ()
@@ -459,7 +467,7 @@ handleLocalEndMessage processId exception = do
 
 -- | Died header.
 diedHeader :: Header
-diedHeader = encode ("died" :: T.Text)
+diedHeader = Header $ encode ("died" :: T.Text)
 
 -- | Handle a local kill message.
 handleLocalKillMessage :: ProcessId -> DestId -> Header -> Payload -> NodeM ()
@@ -993,7 +1001,7 @@ sendEndMessageForProcess process message = do
           Nothing ->
             case message of
               Just message -> message
-              Nothing -> (encode ("ended" :: T.Text), BS.empty)
+              Nothing -> (endedHeader, BS.empty)
       pid = procId $ pstateInfo process
       sourceId =
         case pstateEndCause process of
@@ -1011,6 +1019,10 @@ sendEndMessageForProcess process message = do
         forM_ (groupEndListeners group) $ \(did, _) ->
           sendLocalUserMessage $ Message sourceId did header payload S.empty
       Nothing -> return ()
+
+-- | Ended header
+endedHeader :: Header
+endedHeader = Header $ encode ("ended" :: T.Text)
 
 -- | Kill a process.
 killProcess :: ProcessId -> ProcessId -> Header -> Payload -> NodeM ()
@@ -1048,8 +1060,8 @@ killLocalProcess sourcePid destPid header payload = do
     Nothing -> return ()
 
 -- | Killed header
-killedHeader :: BS.ByteString
-killedHeader = encode ("killed" :: T.Text)
+killedHeader :: Header
+killedHeader = Header $ encode ("killed" :: T.Text)
 
 -- | Kill a group.
 killGroup :: ProcessId -> GroupId -> Header -> Payload -> NodeM ()
@@ -1809,11 +1821,11 @@ notifyUnassign name did = do
 
 -- | Assigned header.
 assignedHeader :: Header
-assignedHeader = encode ("assigned" :: T.Text)
+assignedHeader = Header $ encode ("assigned" :: T.Text)
 
 -- | Unassigned header.
 unassignedHeader :: Header
-unassignedHeader = encode ("unassigned" :: T.Text)
+unassignedHeader = Header $ encode ("unassigned" :: T.Text)
 
 -- | Put a header, payload, and annotations in a message container and then
 -- encode it.

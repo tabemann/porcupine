@@ -817,55 +817,56 @@ word64Size = fromIntegral . BS.length $ U.encode (0 :: Word64)
 
 -- | Socket port register header
 socketPortRegisterHeader :: P.Header
-socketPortRegisterHeader = U.encode ("socketPortRegister" :: T.Text)
+socketPortRegisterHeader = P.makeHeader ("socketPortRegister" :: T.Text)
 
 -- | Socket port unregister header
 socketPortUnregisterHeader :: P.Header
-socketPortUnregisterHeader = U.encode ("socketPortUnregister" :: T.Text)
+socketPortUnregisterHeader = P.makeHeader ("socketPortUnregister" :: T.Text)
 
 -- | Socket listener register header
 socketListenerRegisterHeader :: P.Header
-socketListenerRegisterHeader = U.encode ("socketListenerRegister" :: T.Text)
+socketListenerRegisterHeader = P.makeHeader ("socketListenerRegister" :: T.Text)
 
 -- | Socket listener unregister header
 socketListenerUnregisterHeader :: P.Header
-socketListenerUnregisterHeader = U.encode ("socketListenerUnregister" :: T.Text)
+socketListenerUnregisterHeader =
+  P.makeHeader ("socketListenerUnregister" :: T.Text)
 
 -- | Socket listener add auto register
 addAutoRegisterHeader :: P.Header
-addAutoRegisterHeader = U.encode ("addAutoRegister" :: T.Text)
+addAutoRegisterHeader = P.makeHeader ("addAutoRegister" :: T.Text)
 
 -- | Socket listener remove auto register
 removeAutoRegisterHeader :: P.Header
-removeAutoRegisterHeader = U.encode ("removeAutoRegister" :: T.Text)
+removeAutoRegisterHeader = P.makeHeader ("removeAutoRegister" :: T.Text)
 
 -- | Socket listener add auto end listener
 addAutoEndListenerHeader :: P.Header
-addAutoEndListenerHeader = U.encode ("addAutoEndListener" :: T.Text)
+addAutoEndListenerHeader = P.makeHeader ("addAutoEndListener" :: T.Text)
 
 -- | Socket listener remove auto end listener
 removeAutoEndListenerHeader :: P.Header
-removeAutoEndListenerHeader = U.encode ("removeAutoEndListener" :: T.Text)
+removeAutoEndListenerHeader = P.makeHeader ("removeAutoEndListener" :: T.Text)
 
 -- | Send remote header
 sendRemoteHeader :: P.Header
-sendRemoteHeader = U.encode ("sendRemote" :: T.Text)
+sendRemoteHeader = P.makeHeader ("sendRemote" :: T.Text)
 
 -- | Receive remote header
 receiveRemoteHeader :: P.Header
-receiveRemoteHeader = U.encode ("receiveRemote" :: T.Text)
+receiveRemoteHeader = P.makeHeader ("receiveRemote" :: T.Text)
 
 -- | Auto setup request header
 autoSetupRequestHeader :: P.Header
-autoSetupRequestHeader = U.encode ("autoSetupRequest" :: T.Text)
+autoSetupRequestHeader = P.makeHeader ("autoSetupRequest" :: T.Text)
 
 -- | Auto setup response header
 autoSetupResponseHeader :: P.Header
-autoSetupResponseHeader = U.encode ("autoSetupResponse" :: T.Text)
+autoSetupResponseHeader = P.makeHeader ("autoSetupResponse" :: T.Text)
 
 -- | Accepted connection header
 acceptedHeader :: P.Header
-acceptedHeader = U.encode ("accepted" :: T.Text)
+acceptedHeader = P.makeHeader ("accepted" :: T.Text)
 
 -- | Handle closing a socket after handling an exception
 handleSocket :: NS.Socket -> P.Process a -> P.Process a

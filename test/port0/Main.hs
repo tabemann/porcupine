@@ -72,7 +72,7 @@ data ReceiverState = ReceiverState { recvPortEndCount :: Integer,
 
 -- | Message text header
 textHeader :: P.Header
-textHeader = U.encode ("text" :: T.Text)
+textHeader = P.makeHeader ("text" :: T.Text)
 
 -- | A socket port receiver
 receiver :: NS.SockAddr -> Integer -> P.Process ()

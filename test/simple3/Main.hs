@@ -65,11 +65,11 @@ import System.IO (hSetBuffering,
 
 -- | Message text header
 textHeader :: P.Header
-textHeader = U.encode ("text" :: T.Text)
+textHeader = P.makeHeader ("text" :: T.Text)
 
 -- | Normal quit header
 normalQuitHeader :: P.Header
-normalQuitHeader = U.encode ("normalQuit" :: T.Text)
+normalQuitHeader = P.makeHeader ("normalQuit" :: T.Text)
 
 -- | A simple message receiver.
 simpleMessageReceiver :: Integer -> Bool -> P.Process ()

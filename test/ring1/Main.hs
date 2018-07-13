@@ -65,20 +65,20 @@ import System.IO (hSetBuffering,
 
 -- | Message text header
 textHeader :: P.Header
-textHeader = U.encode ("text" :: T.Text)
+textHeader = P.makeHeader ("text" :: T.Text)
 
 -- | Exit header
 exitHeader :: P.Header
-exitHeader = U.encode ("exit" :: T.Text)
+exitHeader = P.makeHeader ("exit" :: T.Text)
 
 -- | Another ring repeater.
 ringRepeater :: T.Text -> T.Text -> P.Process ()
 ringRepeater myName nextName = do
   myPid <- P.myProcessId
   liftIO $ printf "Assigning \"%s\"...\n" myName
-  P.assign (U.encode myName) $ P.ProcessDest myPid
+  P.assign (P.makeName myName) $ P.ProcessDest myPid
   liftIO $ printf "Looking up \"%s\"...\n" nextName
-  did <- P.lookup $ U.encode nextName
+  did <- P.lookup $ P.makeName nextName
   handleIncoming did
   where handleIncoming did = do
           P.receive [\msg ->
@@ -105,14 +105,14 @@ ringSender :: T.Text -> S.Seq T.Text -> S.Seq NS.SockAddr -> Int ->
 ringSender myName names addresses count = do
   myPid <- P.myProcessId
   liftIO $ printf "Assigning \"%s\"...\n" myName
-  P.assign (U.encode myName) $ P.ProcessDest myPid
+  P.assign (P.makeName myName) $ P.ProcessDest myPid
   let pairs = S.zip [1..(fromIntegral $ S.length addresses)] addresses
   forM_ pairs $ \(index, address) -> do
     liftIO $ printf "Connecting to %d...\n" index
     P.connectRemote index address Nothing
   dids <- forM names $ \name -> do
     liftIO $ printf "Looking up \"%s\"...\n" name
-    did <- P.lookup $ U.encode name
+    did <- P.lookup $ P.makeName name
     liftIO $ printf "Listening for \"%s\" end...\n" name
     P.listenEnd did
     return did

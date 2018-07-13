@@ -66,15 +66,15 @@ import System.IO (hSetBuffering,
 
 -- | Exit header
 exitHeader :: P.Header
-exitHeader = U.encode ("exit" :: T.Text)
+exitHeader = P.makeHeader ("exit" :: T.Text)
 
 -- | Text header
 textHeader :: P.Header
-textHeader = U.encode ("text" :: T.Text)
+textHeader = P.makeHeader ("text" :: T.Text)
 
 -- | Repeater group name
 repeaterGroupName :: P.Name
-repeaterGroupName = U.encode ("repeaterGroup" :: T.Text)
+repeaterGroupName = P.makeName ("repeaterGroup" :: T.Text)
 
 -- | Repeater
 repeater :: P.Process ()

@@ -36,9 +36,9 @@ module Control.Concurrent.Porcupine.Private.Types
   (Process (..),
    Entry,
    Handler,
-   Header,
+   Header (..),
    Payload,
-   Name,
+   Name (..),
    Key,
    AnnotationTag,
    AnnotationValue,
@@ -124,13 +124,15 @@ type Entry = Message -> Process ()
 type Handler a = Message -> Maybe (Process a)
 
 -- | The header type
-type Header = ByteString
+newtype Header = Header ByteString
+               deriving (Eq, Ord, Binary, Hashable)
 
 -- | The payload type
 type Payload = ByteString
 
 -- | The name type
-type Name = ByteString
+newtype Name = Name ByteString
+             deriving (Eq, Ord, Binary, Hashable)
 
 -- | The key type
 type Key = ByteString
@@ -848,8 +850,8 @@ instance Hashable UserRemoteDisconnected
 
 -- | Message container type.
 data MessageContainer =
-  MessageContainer { mcontHeader :: ByteString,
-                     mcontPayload :: ByteString,
+  MessageContainer { mcontHeader :: Header,
+                     mcontPayload :: Payload,
                      mcontAnnotations :: Seq Annotation }
   deriving (Eq, Ord, Generic)
 
@@ -867,7 +869,7 @@ instance Binary MessageContainer where
 
 -- | User assignment type
 data UserAssignment =
-  UserAssignment { usasName :: ByteString,
+  UserAssignment { usasName :: Name,
                    usasDestId :: DestId }
   deriving (Eq, Ord, Generic)
 

@@ -143,7 +143,8 @@ startRun state = do
   run state
 
 -- | Generic server exit header
-genericServerExitHeader = U.encode ("genericServerExit" :: T.Text)
+genericServerExitHeader :: P.Header
+genericServerExitHeader = P.makeHeader ("genericServerExit" :: T.Text)
 
 -- | Run the generic server.
 run :: State a -> P.Process ()

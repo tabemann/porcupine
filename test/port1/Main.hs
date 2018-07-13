@@ -66,11 +66,11 @@ import System.IO (hSetBuffering,
 
 -- | Exit header
 exitHeader :: P.Header
-exitHeader = U.encode ("exit" :: T.Text)
+exitHeader = P.makeHeader ("exit" :: T.Text)
 
 -- | Text header
 textHeader :: P.Header
-textHeader = U.encode ("text" :: T.Text)
+textHeader = P.makeHeader ("text" :: T.Text)
 
 -- | Repeat incoming messages.
 repeater :: NS.SockAddr -> P.Process ()
@@ -144,7 +144,7 @@ sendReceive sockAddr count = do
   forM ([0..count - 1] :: [Integer]) $ \i -> do
     SP.send port textHeader . U.encode . T.pack $ printf "%d" i
     liftIO $ printf "Sending: %d\n" i
-  SP.send port (U.encode ("exit" :: T.Text)) BS.empty
+  SP.send port exitHeader BS.empty
 
 -- | Receiver procoress
 receiver :: P.Process ()

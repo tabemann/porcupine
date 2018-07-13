@@ -63,6 +63,8 @@ module Control.Concurrent.Porcupine.Process
    messageHeader,
    messagePayload,
    messageAnnotations,
+   makeHeader,
+   makeName,
    spawnInit,
    spawnInitAnnotated,
    spawnInit',
@@ -197,6 +199,18 @@ messagePayload = msgPayload
 messageAnnotations :: Message -> S.Seq Annotation
 messageAnnotations = msgAnnotations
 
+-- | Make a header
+makeHeader :: B.Binary a => a -> Header
+makeHeader = Header . encode
+
+-- | Make a name
+makeName :: B.Binary a => a -> Name
+makeName = Name . encode
+
+-- | Empty header
+emptyHeader :: Header
+emptyHeader = Header BS.empty
+
 -- | Spawn a process on the local node without a preexisting process.
 spawnInit :: Entry -> Node -> Header -> Payload -> IO ProcessId
 spawnInit entry node header payload =
@@ -226,7 +240,7 @@ spawnInitAnnotated entry node header payload annotations = do
 -- instantiation parameters (because they are normally only needed for remote
 -- spawns).
 spawnInit' :: Process () -> Node -> IO ProcessId
-spawnInit' action node = spawnInit (\_ -> action) node BS.empty BS.empty
+spawnInit' action node = spawnInit (\_ -> action) node emptyHeader BS.empty
 
 -- | Spawn a process on the local node normally.
 spawn :: Entry -> Header -> Payload -> Process ProcessId
@@ -253,7 +267,7 @@ spawnAnnotated entry header payload annotations = do
 -- | Spawn a process on the local node normally without instantiation parameters
 -- (because they are normally only needed for remote spawns).
 spawn' :: Process () -> Process ProcessId
-spawn' action = spawn (\_ -> action) BS.empty BS.empty
+spawn' action = spawn (\_ -> action) emptyHeader BS.empty
 
 -- | Spawn a process on the local node normally for another process.
 spawnAsProxy :: Entry -> ProcessId -> Header -> Payload -> Process ()
@@ -280,7 +294,7 @@ spawnAnnotatedAsProxy entry pid header payload annotations = do
 -- instantiation parameters (because they are normally only needed for remote
 -- spawns).
 spawnAsProxy' :: Process () -> ProcessId -> Process ()
-spawnAsProxy' action pid = spawnAsProxy (\_ -> action) pid BS.empty BS.empty
+spawnAsProxy' action pid = spawnAsProxy (\_ -> action) pid emptyHeader BS.empty
 
 -- | Spawn a process on the local node normally and atomically listen for end.
 spawnListenEnd :: Entry -> Header -> Payload -> S.Seq DestId ->
@@ -311,7 +325,7 @@ spawnListenEndAnnotated entry header payload annotations endListeners = do
 -- listen for end.
 spawnListenEnd' :: Process () -> S.Seq DestId -> Process ProcessId
 spawnListenEnd' action endListeners =
-  spawnListenEnd (\_ -> action) BS.empty BS.empty endListeners
+  spawnListenEnd (\_ -> action) emptyHeader BS.empty endListeners
 
 -- | Spawn a process on the local node normally for another process and
 -- atomically listen for end.
@@ -342,7 +356,7 @@ spawnListenEndAnnotatedAsProxy entry pid header payload annotations
 -- spawns) and atomically listen for End.
 spawnListenEndAsProxy' :: Process () -> ProcessId -> S.Seq DestId -> Process ()
 spawnListenEndAsProxy' action pid endListeners =
-  spawnListenEndAsProxy (\_ -> action) pid BS.empty BS.empty endListeners
+  spawnListenEndAsProxy (\_ -> action) pid emptyHeader BS.empty endListeners
 
 -- | Send a message to a process or group.
 send :: DestId -> Header -> Payload -> Process ()
@@ -387,7 +401,11 @@ quit header payload = do
 
 -- | Quit the current process with a generic quit message header and payload.
 quit' :: Process ()
-quit' = quit (encode ("genericQuit" :: T.Text)) BS.empty
+quit' = quit genericQuitHeader BS.empty
+
+-- | Generic quit header
+genericQuitHeader :: Header
+genericQuitHeader = makeHeader ("genericQuit" :: T.Text)
 
 -- | Kill another process or process group.
 kill :: DestId -> Header -> Payload -> Process ()
@@ -401,7 +419,11 @@ kill did header payload = do
 -- | Kill another process or process group with a generic kill message header
 -- and payload.
 kill' :: DestId -> Process ()
-kill' did = kill did (encode ("genericKill" :: T.Text)) BS.empty
+kill' did = kill did genericKillHeader BS.empty
+
+-- | Generic kill header
+genericKillHeader :: Header
+genericKillHeader = makeHeader ("genericKill" :: T.Text)
 
 -- | Kill another process or process group for another process.
 killAsProxy :: DestId -> ProcessId -> Header -> Payload -> Process ()
@@ -415,7 +437,7 @@ killAsProxy did pid header payload = do
 -- kill message header and payload.
 killAsProxy' :: DestId -> ProcessId -> Process ()
 killAsProxy' did pid =
-  killAsProxy did pid (encode ("genericKill" :: T.Text)) BS.empty
+  killAsProxy did pid genericKillHeader BS.empty
 
 -- | Shutdown a node.
 shutdown :: NodeId -> Header -> Payload -> Process ()
@@ -433,7 +455,11 @@ shutdown nid header payload = do
 
 -- | Shutdown a node with a generic shutdown message header and payload.
 shutdown' :: NodeId -> Process ()
-shutdown' nid = shutdown nid (encode ("genericShutdown" :: T.Text)) BS.empty
+shutdown' nid = shutdown nid genericShutdownHeader BS.empty
+
+-- | Generic shutdown header
+genericShutdownHeader :: Header
+genericShutdownHeader = makeHeader ("genericShutdown" :: T.Text)
 
 -- | Shutdown a node for another process.
 shutdownAsProxy :: NodeId -> ProcessId -> Header -> Payload -> Process ()
@@ -452,7 +478,7 @@ shutdownAsProxy nid pid header payload = do
 -- and payload.
 shutdownAsProxy' :: NodeId -> ProcessId -> Process ()
 shutdownAsProxy' nid pid =
-  shutdownAsProxy nid pid (encode ("genericShutdown" :: T.Text)) BS.empty
+  shutdownAsProxy nid pid genericShutdownHeader BS.empty
 
 -- | Subscribe to a group.
 subscribe :: GroupId -> Process ()

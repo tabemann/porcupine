@@ -109,35 +109,35 @@ proxyDestIdTag = encode ("proxyDestId" :: T.Text)
 
 -- | Quit header
 quitHeader :: P.Header
-quitHeader = encode ("quit" :: T.Text)
+quitHeader = P.makeHeader ("quit" :: T.Text)
 
 -- | Ended header
 endedHeader :: P.Header
-endedHeader = encode ("ended" :: T.Text)
+endedHeader = P.makeHeader ("ended" :: T.Text)
 
 -- | Killed header
 killedHeader :: P.Header
-killedHeader = encode ("killed" :: T.Text)
+killedHeader = P.makeHeader ("killed" :: T.Text)
 
 -- | Died header
 diedHeader :: P.Header
-diedHeader = encode ("died" :: T.Text)
+diedHeader = P.makeHeader ("died" :: T.Text)
 
 -- | Remote connect failed header
 remoteConnectFailedHeader :: P.Header
-remoteConnectFailedHeader = encode ("remoteConnectFailed" :: T.Text)
+remoteConnectFailedHeader = P.makeHeader ("remoteConnectFailed" :: T.Text)
 
 -- | Remote disconnected header
 remoteDisconnectedHeader :: P.Header
-remoteDisconnectedHeader = encode ("remoteDisconnected" :: T.Text)
+remoteDisconnectedHeader = P.makeHeader ("remoteDisconnected" :: T.Text)
 
 -- | Assigned header.
 assignedHeader :: P.Header
-assignedHeader = encode ("assigned" :: T.Text)
+assignedHeader = P.makeHeader ("assigned" :: T.Text)
 
 -- | Unassigned header.
 unassignedHeader :: P.Header
-unassignedHeader = encode ("unassigned" :: T.Text)
+unassignedHeader = P.makeHeader ("unassigned" :: T.Text)
 
 -- | Match a message header.
 matchHeader :: P.Message -> P.Header -> Bool

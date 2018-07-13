@@ -65,11 +65,11 @@ import System.IO (hSetBuffering,
 
 -- | The other process header.
 otherProcessHeader :: P.Header
-otherProcessHeader = U.encode ("otherProcess" :: T.Text)
+otherProcessHeader = P.makeHeader ("otherProcess" :: T.Text)
 
 -- | Message text header
 textHeader :: P.Header
-textHeader = U.encode ("text" :: T.Text)
+textHeader = P.makeHeader ("text" :: T.Text)
 
 -- | The ring repeater process.
 ringRepeater :: Int -> P.Process ()

@@ -83,7 +83,7 @@ ringRepeater myName nextName = do
   where handleIncoming did = do
           P.receive [\msg ->
                        if U.matchHeader msg textHeader
-                       then case U.tryDecodeMessage msg of
+                       then case U.getPayload msg of
                               Right text ->
                                 Just $ do
                                   liftIO $ printf "Got text: %s\n"
@@ -132,7 +132,7 @@ ringSender myName names addresses count = do
           dids' <-
             P.receive [\msg ->
                          if U.matchHeader msg textHeader
-                         then case U.tryDecodeMessage msg of
+                         then case U.getPayload msg of
                                 Right text ->
                                   Just $ do
                                     liftIO $ printf "Got text back: %s\n"

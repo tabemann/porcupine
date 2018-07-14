@@ -327,7 +327,7 @@ lookupRemote (SocketPort pid) name timeout = do
   U.sendWithUniqueId (P.ProcessDest pid) uid lookupRemoteHeader name
   maybeDid <- P.receiveWithTimeout timeout
     [\msg -> if U.matchHeaderAndUniqueId msg remoteAssignmentHeader uid
-             then case U.tryDecodeMessage msg of
+             then case U.getPayload msg of
                     Right assignment ->
                       Just . return $ P.usasDestId assignment
                     Left _ -> Nothing
@@ -344,13 +344,13 @@ tryLookupRemote (SocketPort pid) name timeout = do
   U.sendWithUniqueId (P.ProcessDest pid) uid tryLookupRemoteHeader name
   maybeDid <- P.receiveWithTimeout timeout
     [\msg -> if U.matchHeaderAndUniqueId msg remoteAssignmentHeader uid
-             then case U.tryDecodeMessage msg of
+             then case U.getPayload msg of
                     Right assignment ->
                       Just . return . Just $ P.usasDestId assignment
                     Left _ -> Nothing
              else Nothing,
      \msg -> if U.matchHeaderAndUniqueId msg noRemoteAssignmentHeader uid
-             then case U.tryDecodeMessage msg :: Either T.Text P.Name of
+             then case U.getPayload msg :: Either T.Text P.Name of
                     Right _ -> Just $ return Nothing
                     Left _ -> Nothing
              else Nothing ]
@@ -389,7 +389,7 @@ handleAsyncLookupRemoteResponse :: AsyncLookupRemote -> P.Message ->
                                    Maybe (Maybe P.DestId)
 handleAsyncLookupRemoteResponse (AsyncLookupRemote uid) msg
   | U.matchHeaderAndUniqueId msg remoteAssignmentHeader uid =
-    case U.tryDecodeMessage msg of
+    case U.getPayload msg of
       Right assignment -> Just . Just $ P.usasDestId assignment
       Left _ -> Nothing
   | U.matchHeaderAndUniqueId msg noRemoteAssignmentHeader uid = Just $ Nothing
@@ -400,7 +400,7 @@ handleAsyncLookupRemoteResponse (AsyncLookupRemote uid) msg
 accept :: SocketListener -> P.Message -> Maybe SocketPort
 accept (SocketListener listenerPid) msg
   | U.matchHeaderAndProcessId msg acceptedHeader listenerPid =
-    case U.tryDecodeMessage msg :: Either T.Text P.ProcessId of
+    case U.getPayload msg :: Either T.Text P.ProcessId of
       Right pid -> Just $ SocketPort pid
       Left _ -> Nothing
   | True = Nothing
@@ -505,7 +505,7 @@ runListenProcess parentPid socket key = do
   response <- P.receive
     [\msg ->
         if U.matchHeaderAndProcessId msg autoSetupResponseHeader parentPid
-        then case U.tryDecodeMessage msg of
+        then case U.getPayload msg of
                Right response -> Just $ return response
                Left _ -> Nothing
         else Nothing]
@@ -531,7 +531,7 @@ handleListenerRegister :: SocketListenerState -> P.Message ->
                           Maybe (P.Process SocketListenerState)
 handleListenerRegister state msg
   | U.matchHeader msg socketListenerRegisterHeader =
-    case U.tryDecodeMessage msg :: Either T.Text P.DestId of
+    case U.getPayload msg :: Either T.Text P.DestId of
       Right did ->
         case M.lookup did $ slsRegistered state of
           Just count ->
@@ -548,7 +548,7 @@ handleListenerUnregister :: SocketListenerState -> P.Message ->
                             Maybe (P.Process SocketListenerState)
 handleListenerUnregister state msg
   | U.matchHeader msg socketListenerUnregisterHeader =
-    case U.tryDecodeMessage msg :: Either T.Text P.DestId of
+    case U.getPayload msg :: Either T.Text P.DestId of
       Right did ->
         case M.lookup did $ slsRegistered state of
           Just 1 ->
@@ -566,7 +566,7 @@ handleAddAutoEndListener :: SocketListenerState -> P.Message ->
                             Maybe (P.Process SocketListenerState)
 handleAddAutoEndListener state msg
   | U.matchHeader msg addAutoEndListenerHeader =
-    case U.tryDecodeMessage msg :: Either T.Text P.DestId of
+    case U.getPayload msg :: Either T.Text P.DestId of
       Right did ->
         Just . return $ state { slsAutoEndListeners =
                                   slsAutoEndListeners state |> did }
@@ -578,7 +578,7 @@ handleRemoveAutoEndListener :: SocketListenerState -> P.Message ->
                                Maybe (P.Process SocketListenerState)
 handleRemoveAutoEndListener state msg
   | U.matchHeader msg removeAutoEndListenerHeader =
-    case U.tryDecodeMessage msg :: Either T.Text P.DestId of
+    case U.getPayload msg :: Either T.Text P.DestId of
       Right did ->
         case S.findIndexL (== did) $ slsAutoEndListeners state of
           Just index ->
@@ -607,7 +607,7 @@ handleAccepted :: SocketListenerState -> P.Message ->
                   Maybe (P.Process SocketListenerState)
 handleAccepted state msg
   | U.matchHeaderAndProcessId msg acceptedHeader $ slsListenPid state =
-    case U.tryDecodeMessage msg :: Either T.Text P.ProcessId of
+    case U.getPayload msg :: Either T.Text P.ProcessId of
       Right _ ->
         Just $ do
           forM_ (M.keys $ slsRegistered state) $ \did ->
@@ -673,7 +673,7 @@ handleLookupRemote :: SocketPortState -> P.Message ->
 handleLookupRemote state msg
   | U.matchHeader msg lookupRemoteHeader =
     Just $ do
-      case U.tryDecodeMessage msg of
+      case U.getPayload msg of
         Right name ->
           case M.lookup name $ spsAssignment state of
             Just did -> do
@@ -682,7 +682,7 @@ handleLookupRemote state msg
               U.reply msg remoteAssignmentHeader payload
               return state
             Nothing ->
-              case U.tryDecodeUniqueId msg of
+              case U.getUniqueId msg of
                 Right (Just uid) -> do
                   logMessage . printf "Deferring remote lookup for %s\n" $
                     show uid
@@ -702,7 +702,7 @@ handleTryLookupRemote :: SocketPortState -> P.Message ->
 handleTryLookupRemote state msg
   | U.matchHeader msg tryLookupRemoteHeader =
     Just $ do
-      case U.tryDecodeMessage msg of
+      case U.getPayload msg of
         Right name ->
           case M.lookup name $ spsAssignment state of
             Just did -> do
@@ -722,7 +722,7 @@ handleIncoming :: SocketPortState -> P.Message ->
 handleIncoming state msg
   | U.matchHeaderAndProcessId msg receiveRemoteHeader $ spsReceivePid state =
     Just $ do
-      case U.tryDecodeMessage msg of
+      case U.getPayload msg of
         Right (SocketUserMessage container) -> do
           logMessage . printf "Received user message with %d annotations\n" .
             S.length $ P.mcontAnnotations container
@@ -842,7 +842,7 @@ handleSendRemote :: P.ProcessId -> NS.Socket -> P.Message ->
 handleSendRemote parentPid socket msg
   | U.matchHeaderAndProcessId msg sendRemoteHeader parentPid =
     Just $ do
-      case U.tryDecodeMessage msg of
+      case U.getPayload msg of
         Right container ->
           sendSocketMessage socket $ SocketUserMessage container
         Left _ -> return ()
@@ -853,7 +853,7 @@ handleAssigned :: NS.Socket -> P.Message -> Maybe (P.Process ())
 handleAssigned socket msg
   | U.matchHeader msg U.assignedHeader =
     Just $ do
-      case U.tryDecodeMessage msg of
+      case U.getPayload msg of
         Right P.UserAssignment{..} -> do
           sendSocketMessage socket $ SocketAssign usasName usasDestId
         Left _ -> return ()
@@ -864,7 +864,7 @@ handleUnassigned :: NS.Socket -> P.Message -> Maybe (P.Process ())
 handleUnassigned socket msg
   | U.matchHeader msg U.unassignedHeader =
     Just $ do
-      case U.tryDecodeMessage msg of
+      case U.getPayload msg of
         Right P.UserAssignment{..} ->
           sendSocketMessage socket $ SocketUnassign usasName usasDestId
         Left _ -> return ()

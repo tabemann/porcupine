@@ -107,7 +107,7 @@ receiver sockAddr count = do
             Nothing -> Nothing
         handleText state msg
           | U.matchHeader msg textHeader =
-            case U.tryDecodeMessage msg :: Either T.Text T.Text of
+            case U.getPayload msg :: Either T.Text T.Text of
               Right text ->
                 Just $ do
                   liftIO $ printf "Got message from %s: %s\n"

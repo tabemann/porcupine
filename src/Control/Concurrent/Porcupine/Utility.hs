@@ -49,12 +49,11 @@ module Control.Concurrent.Porcupine.Utility
    isEndForProcessId,
    isNormalEndForProcessId,
    isFailForProcessId,
+   getPayload,
    getAnnotation,
-   tryDecodeMessage,
-   tryDecodeAnnotation,
-   tryDecodeUniqueId,
-   tryDecodeProxySourceId,
-   tryDecodeProxyDestId,
+   getUniqueId,
+   getProxySourceId,
+   getProxyDestId,
    processIdOfMessage,
    sendWithUniqueId,
    sendWithUniqueIdAsProxy,
@@ -156,7 +155,7 @@ matchHeaderAndProcessId message header pid =
 -- | Match a unique Id.
 matchUniqueId :: P.Message -> P.UniqueId -> Bool
 matchUniqueId message uid =
-  case tryDecodeUniqueId message of
+  case getUniqueId message of
     Right (Just uid') -> uid == uid'
     _ -> False
 
@@ -183,7 +182,7 @@ excludeHeaderAndProcessId message header pid =
 -- | Exclude a unique Id.
 excludeUniqueId :: P.Message -> P.UniqueId -> Bool
 excludeUniqueId message uid =
-  case tryDecodeUniqueId message of
+  case getUniqueId message of
     Right (Just uid') -> uid /= uid'
     _ -> True
 
@@ -230,9 +229,9 @@ isFailForProcessId message pid = (matchHeader message diedHeader ||
                                    remoteDisconnectedHeader) &&
                                  matchProcessId message pid
 
--- | Get an annotation for a message.
-getAnnotation :: P.Message -> P.AnnotationTag -> Maybe P.AnnotationValue
-getAnnotation message tag =
+-- | Get a raw annotation for a message.
+getAnnotationRaw :: P.Message -> P.AnnotationTag -> Maybe P.AnnotationValue
+getAnnotationRaw message tag =
   case S.findIndexL (\(P.Annotation tag' _) -> tag == tag') $
        P.messageAnnotations message of
     Just index ->
@@ -241,32 +240,32 @@ getAnnotation message tag =
         Nothing -> error "impossible"
     Nothing -> Nothing
 
--- | Try to decode a message payload.
-tryDecodeMessage :: B.Binary a => P.Message -> Either T.Text a
-tryDecodeMessage = tryDecode . P.messagePayload
+-- | Get a message payload.
+getPayload :: B.Binary a => P.Message -> Either T.Text a
+getPayload = tryDecode . P.messagePayload
 
--- | Try to decode a message annotation.
-tryDecodeAnnotation :: B.Binary a => P.Message -> P.AnnotationTag ->
-                       Either T.Text (Maybe a)
-tryDecodeAnnotation message tag =
-  case getAnnotation message tag of
+-- | Get a message annotation.
+getAnnotation :: B.Binary a => P.Message -> P.AnnotationTag ->
+                 Either T.Text (Maybe a)
+getAnnotation message tag =
+  case getAnnotationRaw message tag of
     Just value ->
       case tryDecode value of
         Right value -> Right $ Just value
         Left errorText -> Left errorText
     Nothing -> Right Nothing
 
--- | Try to decode a message unique Id.
-tryDecodeUniqueId :: P.Message -> Either T.Text (Maybe P.UniqueId)
-tryDecodeUniqueId = (flip tryDecodeAnnotation) uniqueIdTag
+-- | Get a message unique Id.
+getUniqueId :: P.Message -> Either T.Text (Maybe P.UniqueId)
+getUniqueId = (flip getAnnotation) uniqueIdTag
 
--- | Try to decode a message proxy source Id.
-tryDecodeProxySourceId :: P.Message -> Either T.Text (Maybe P.SourceId)
-tryDecodeProxySourceId = (flip tryDecodeAnnotation) proxySourceIdTag
+-- | Get a message proxy source Id.
+getProxySourceId :: P.Message -> Either T.Text (Maybe P.SourceId)
+getProxySourceId = (flip getAnnotation) proxySourceIdTag
 
--- | Try to decode a message proxy destination Id.
-tryDecodeProxyDestId :: P.Message -> Either T.Text (Maybe P.DestId)
-tryDecodeProxyDestId = (flip tryDecodeAnnotation) proxyDestIdTag
+-- | Get a message proxy destination Id.
+getProxyDestId :: P.Message -> Either T.Text (Maybe P.DestId)
+getProxyDestId = (flip getAnnotation) proxyDestIdTag
 
 -- | Get the process Id of a message.
 processIdOfMessage = processIdOfSourceId . P.messageSourceId
@@ -288,11 +287,11 @@ sendWithUniqueIdAsProxy did sid uid header payload =
 reply :: B.Binary a => P.Message -> P.Header -> a -> P.Process ()
 reply msg header payload = do
   let uniqueIdAnnotation =
-        case tryDecodeUniqueId msg of
+        case getUniqueId msg of
           Right (Just uid) -> [P.Annotation uniqueIdTag $ encode uid]
           _ -> []
       proxyDestIdAnnotation =
-        case tryDecodeProxySourceId msg of
+        case getProxySourceId msg of
           Right (Just sid) ->
             case processIdOfSourceId sid of
               Just pid ->

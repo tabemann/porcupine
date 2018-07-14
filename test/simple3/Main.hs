@@ -79,7 +79,7 @@ simpleMessageReceiver index shutdownOnQuit = do
   where loop = do
           P.receive [\msg ->
                        if U.matchHeader msg textHeader
-                       then case U.tryDecodeMessage msg of
+                       then case U.getPayload msg of
                               Right text ->
                                 Just . liftIO $ printf "Received %s for %d\n"
                                 (text :: T.Text) index

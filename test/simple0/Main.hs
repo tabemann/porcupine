@@ -79,7 +79,7 @@ simpleMessageReceiver = do
   where loop = do
           P.receive [\msg ->
                        if U.matchHeader msg textHeader
-                       then case U.tryDecodeMessage msg of
+                       then case U.getPayload msg of
                               Right text ->
                                 Just . liftIO . putStrLn . T.pack $
                                 printf "Received %s" (text :: T.Text)

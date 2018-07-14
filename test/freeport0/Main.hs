@@ -85,9 +85,9 @@ repeater = do
         handleText msg
           | U.matchHeader msg textHeader =
             Just $ do
-              case U.tryDecodeMessage msg :: Either T.Text T.Text of
+              case U.getPayload msg :: Either T.Text T.Text of
                 Right text -> do
-                  case U.tryDecodeProxySourceId msg of
+                  case U.getProxySourceId msg of
                     Right (Just sid) -> do
                       liftIO . printf "Received \"%s\" from %s\n" text $
                         show sid
@@ -143,9 +143,9 @@ sendReceive address count = do
         handleText msg
           | U.matchHeader msg textHeader =
             Just $ do
-              case U.tryDecodeMessage msg :: Either T.Text T.Text of
+              case U.getPayload msg :: Either T.Text T.Text of
                 Right text -> do
-                  case U.tryDecodeProxySourceId msg of
+                  case U.getProxySourceId msg of
                     Right (Just sid) -> do
                       liftIO . printf "Received \"%s\" back from %s\n" text $
                         show sid

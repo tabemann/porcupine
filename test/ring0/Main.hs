@@ -78,7 +78,7 @@ ringRepeater count = do
   pid <- P.receive
     [\msg ->
         if U.matchHeader msg otherProcessHeader
-        then case U.tryDecodeMessage msg :: Either T.Text P.ProcessId of
+        then case U.getPayload msg :: Either T.Text P.ProcessId of
                Right pid -> Just $ return pid
                Left errorText -> error $ T.unpack errorText
         else Nothing]
@@ -88,7 +88,7 @@ ringRepeater count = do
           P.receive
             [\msg ->
                 if U.matchHeader msg textHeader
-                then case U.tryDecodeMessage msg :: Either T.Text T.Text of
+                then case U.getPayload msg :: Either T.Text T.Text of
                        Right text ->
                          Just $ do
                            liftIO $ printf "Got text: %s\n" text
@@ -122,7 +122,7 @@ ringSender address pid count = do
             [\msg ->
                 if U.matchHeader msg textHeader &&
                    any (U.matchUniqueId msg) uids
-                then case U.tryDecodeMessage msg :: Either T.Text T.Text of
+                then case U.getPayload msg :: Either T.Text T.Text of
                        Right text ->
                          Just $ do
                            liftIO $ printf "Got text back: %s\n" text

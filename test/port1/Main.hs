@@ -113,7 +113,7 @@ handleRepeaterEnd msg
 handleRepeaterTextMessage :: P.Message -> Maybe (P.Process ())
 handleRepeaterTextMessage msg
   | U.matchHeader msg textHeader =
-    case U.tryDecodeMessage msg :: Either T.Text T.Text of
+    case U.getPayload msg :: Either T.Text T.Text of
       Right text ->
         Just $ do
           liftIO $ printf "Received text for %s: %s\n"
@@ -167,7 +167,7 @@ handleReceiverEnd msg
 handleReceiverTextMessage :: P.Message -> Maybe (P.Process ())
 handleReceiverTextMessage msg
   | U.matchHeader msg textHeader =
-    case U.tryDecodeMessage msg :: Either T.Text T.Text of
+    case U.getPayload msg :: Either T.Text T.Text of
       Right text ->
         Just $ do
           liftIO $ printf "Received text back for %s: %s\n"

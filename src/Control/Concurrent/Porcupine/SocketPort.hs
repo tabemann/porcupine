@@ -203,52 +203,52 @@ unlisten (SocketListener pid) = P.kill' $ P.ProcessDest pid
 -- | Register on a socket port.
 registerPort :: SocketPort -> P.DestId -> P.Process ()
 registerPort (SocketPort pid) did =
-  P.send (P.ProcessDest pid) socketPortRegisterHeader did
+  P.send pid socketPortRegisterHeader did
 
 -- | Unregister on a socket port.
 unregisterPort :: SocketPort -> P.DestId -> P.Process ()
 unregisterPort (SocketPort pid) did =
-  P.send (P.ProcessDest pid) socketPortUnregisterHeader did
+  P.send pid socketPortUnregisterHeader did
 
 -- | Register on a socket listener.
 registerListener :: SocketListener -> P.DestId -> P.Process ()
 registerListener (SocketListener pid) did =
-  P.send (P.ProcessDest pid) socketListenerRegisterHeader did
+  P.send pid socketListenerRegisterHeader did
 
 -- | Unregister on a socket listener.
 unregisterListener :: SocketListener -> P.DestId -> P.Process ()
 unregisterListener (SocketListener pid) did =
-  P.send (P.ProcessDest pid) socketListenerUnregisterHeader did
+  P.send pid socketListenerUnregisterHeader did
 
 -- | Add auto-registration for a socket listener.
 addAutoRegister :: SocketListener -> P.DestId -> P.Process ()
 addAutoRegister (SocketListener pid) did =
-  P.send (P.ProcessDest pid) addAutoRegisterHeader did
+  P.send pid addAutoRegisterHeader did
 
 -- | Remove auto-registration for a socket listener.
 removeAutoRegister :: SocketListener -> P.DestId -> P.Process ()
 removeAutoRegister (SocketListener pid) did =
-  P.send (P.ProcessDest pid) removeAutoRegisterHeader did
+  P.send pid removeAutoRegisterHeader did
 
 -- | Add auto-end listening for a socket listener.
 addAutoEndListener :: SocketListener -> P.DestId -> P.Process ()
 addAutoEndListener (SocketListener pid) did =
-  P.send (P.ProcessDest pid) addAutoEndListenerHeader did
+  P.send pid addAutoEndListenerHeader did
 
 -- | Remove auto-end listening for a socket listener.
 removeAutoEndListener :: SocketListener -> P.DestId -> P.Process ()
 removeAutoEndListener (SocketListener pid) did =
-  P.send (P.ProcessDest pid) removeAutoEndListenerHeader did
+  P.send pid removeAutoEndListenerHeader did
 
 -- | Send a message to a socket port.
 send :: B.Binary a => SocketPort -> P.Header -> a -> P.Process ()
-send (SocketPort pid) header payload = P.send (P.ProcessDest pid) header payload
+send (SocketPort pid) header payload = P.send pid header payload
 
 -- | Send a message to a socket port with a uniqueId.
 sendWithUniqueId :: B.Binary a => SocketPort -> P.UniqueId -> P.Header -> a ->
                     P.Process ()
 sendWithUniqueId (SocketPort pid) uid header payload =
-  U.sendWithUniqueId (P.ProcessDest pid) uid header payload
+  U.sendWithUniqueId pid uid header payload
 
 -- | Look up a socket port.
 lookup :: P.Name -> P.Process (Maybe SocketPort)
@@ -428,7 +428,7 @@ runListenProcess :: P.ProcessId -> NS.Socket -> P.Key -> P.Process ()
 runListenProcess parentPid socket key = do
   (socket', _) <- liftIO $ NS.accept socket
   logMessage "Got incoming socket\n"
-  P.send (P.ProcessDest parentPid) autoSetupRequestHeader BS.empty
+  P.send parentPid autoSetupRequestHeader BS.empty
   logMessage "Sent auto setup request to parent process\n"
   response <- P.receive
     [\msg ->
@@ -441,7 +441,7 @@ runListenProcess parentPid socket key = do
   childPid <- P.spawnListenEnd' (startSocketPort socket' key
                                  (asrAutoRegister response))
               (asrAutoEndListeners response)
-  P.send (P.ProcessDest parentPid) acceptedHeader childPid
+  P.send parentPid acceptedHeader childPid
   runListenProcess parentPid socket key
 
 -- | Run the parent listener process.
@@ -590,11 +590,11 @@ startSocketPort socket key registered = do
   myPid <- P.myProcessId
   sendPid <- P.spawnListenEnd' (startSendProcess myPid socket key)
              [P.ProcessDest myPid]
-  P.handle (\e -> do P.kill' $ P.ProcessDest sendPid
+  P.handle (\e -> do P.kill' sendPid
                      liftIO $ throw (e :: SomeException)) $ do
     receivePid <- P.spawnListenEnd' (startReceiveProcess myPid socket key)
                   [P.ProcessDest myPid]
-    P.handle (\e -> do P.kill' $ P.ProcessDest receivePid
+    P.handle (\e -> do P.kill' receivePid
                        liftIO $ throw (e :: SomeException)) $ do
       runSocketPort $ SocketPortState { spsSendPid = sendPid,
                                         spsReceivePid = receivePid,
@@ -693,7 +693,7 @@ handleOutgoing state msg
             let payload' =
                   P.MessageContainer (P.messageHeader msg)
                   (P.messagePayload msg) (P.messageAnnotations msg)
-            P.send (P.ProcessDest $ spsSendPid state) sendRemoteHeader
+            P.send (spsSendPid state) sendRemoteHeader
               payload'
           else return ()
         return state
@@ -778,7 +778,7 @@ runReceiveProcess parentPid socket buffer = do
           logMessage "Failed to decode message container\n"
           P.quit'
         Right message -> do
-          P.send (P.ProcessDest parentPid) receiveRemoteHeader message
+          P.send parentPid receiveRemoteHeader message
           runReceiveProcess parentPid socket rest
   
 -- | Receive a minimum number of bytes

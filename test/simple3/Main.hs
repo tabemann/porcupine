@@ -106,14 +106,14 @@ simpleMessageSender pid0 pid1 address = do
   P.subscribeAsProxy gid pid0
   P.subscribeAsProxy gid pid1
   liftIO $ putStrLn "Listening for termination..."
-  P.listenEnd $ P.ProcessDest pid0
-  P.listenEnd $ P.ProcessDest pid1
+  P.listenEnd pid0
+  P.listenEnd pid1
   liftIO $ putStrLn "Starting to send messages..."
   forM_ ([1..100] :: [Integer]) $ \n -> do
     liftIO . putStrLn . T.pack $ printf "Sending %d" n
-    P.send (P.GroupDest gid) textHeader . T.pack $ printf "%d" n
+    P.send gid textHeader . T.pack $ printf "%d" n
   liftIO $ putStrLn "Sending message requesting quit..."
-  P.send (P.GroupDest gid) normalQuitHeader BS.empty
+  P.send gid normalQuitHeader BS.empty
   liftIO $ putStrLn "Waiting for termination..."
   replicateM 2 $ do
     P.receive [\msg ->

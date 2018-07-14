@@ -34,9 +34,7 @@
 module Control.Concurrent.Porcupine.GenericServer
 
   (GenericServer,
-   Handler (..),
-   Match,
-   Action,
+   Handler,
    QuitOnEnd,
    start,
    stop,
@@ -69,13 +67,7 @@ instance Show GenericServer where
   show (GenericServer pid) = printf "genericServer:%s" $ show pid
 
 -- | Generic server handler type
-data Handler a = Handler (Match a) (Action a)
-
--- | Generic server handler match type
-type Match a = a -> P.Message -> Bool
-
--- | Generic server handler action type
-type Action a = a -> P.Message -> P.Process a
+type Handler a = a -> P.Message -> Maybe (P.Process a)
 
 -- | Whether to quit on detecting process end
 data QuitOnEnd = QuitOnEnd | QuitOnFail | NotQuitOnEnd
@@ -103,12 +95,18 @@ start name quitOnEnd groups listened handlers state = do
 -- | Stop generic server.
 stop :: GenericServer -> P.Process ()
 stop (GenericServer pid) =
-  P.send (P.ProcessDest pid) genericServerExitHeader BS.empty
+  P.send pid genericServerExitHeader BS.empty
 
 -- | Send a message to a generic server.
 send :: B.Binary a => GenericServer -> P.Header -> a -> P.Process ()
 send (GenericServer pid) header payload =
-  P.send (P.ProcessDest pid) header payload
+  P.send pid header payload
+
+-- | Send a message to a generic server with a unique Id.
+sendWithUniqueId :: B.Binary a => GenericServer -> P.UniqueId -> P.Header ->
+                    a -> P.Process ()
+sendWithUniqueId (GenericServer pid) uid header payload =
+  U.sendWithUniqueId pid uid header payload
 
 -- | Look up a generic server.
 lookup :: P.Name -> P.Process (Maybe GenericServer)
@@ -165,9 +163,7 @@ run state = do
         doExit msg
           | U.matchHeader msg genericServerExitHeader = Just $ quit state
           | True = Nothing
-        handleCase (Handler match action) msg
-          | match (stState state) msg = Just $ action (stState state) msg
-          | True = Nothing
+        handleCase handler = handler (stState state)
 
 -- | Quit the generic server.
 quit :: State a -> P.Process a

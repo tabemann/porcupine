@@ -271,16 +271,16 @@ getProxyDestId = (flip getAnnotation) proxyDestIdTag
 processIdOfMessage = processIdOfSourceId . P.messageSourceId
 
 -- | Send a message with a unique Id.
-sendWithUniqueId :: B.Binary a => P.DestId -> P.UniqueId -> P.Header -> a ->
-                    P.Process ()
-sendWithUniqueId did uid header payload =
-  P.sendAnnotated did header payload [P.Annotation uniqueIdTag $ encode uid]
+sendWithUniqueId :: (P.IsDest a, B.Binary b) => a -> P.UniqueId -> P.Header ->
+                    b -> P.Process ()
+sendWithUniqueId dest uid header payload =
+  P.sendAnnotated dest header payload [P.Annotation uniqueIdTag $ encode uid]
 
 -- | Send a message as a proxy with a unique Id.
-sendWithUniqueIdAsProxy :: B.Binary a => P.DestId -> P.SourceId ->
-                           P.UniqueId -> P.Header -> a -> P.Process ()
-sendWithUniqueIdAsProxy did sid uid header payload =
-  P.sendAnnotatedAsProxy did sid header payload
+sendWithUniqueIdAsProxy :: (P.IsDest a, B.Binary b) => a -> P.SourceId ->
+                           P.UniqueId -> P.Header -> b -> P.Process ()
+sendWithUniqueIdAsProxy dest sid uid header payload =
+  P.sendAnnotatedAsProxy dest sid header payload
     [P.Annotation uniqueIdTag $ encode uid]
 
 -- | Reply to a message.
@@ -300,7 +300,7 @@ reply msg header payload = do
           _ -> []
       annotations = uniqueIdAnnotation >< proxyDestIdAnnotation
   case processIdOfMessage msg of
-    Just pid -> P.sendAnnotated (P.ProcessDest pid) header payload annotations
+    Just pid -> P.sendAnnotated pid header payload annotations
     Nothing -> return ()
 
 -- | Get node Id of destination Id

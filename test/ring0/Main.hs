@@ -107,13 +107,12 @@ ringSender address pid count = do
   liftIO $ putStrLn "Connecting to node 0..."
   P.connectRemote 0 address Nothing
   liftIO . printf "Listening for process %s termination...\n" $ show pid
-  P.listenEnd $ P.ProcessDest pid
+  P.listenEnd pid
   myPid <- P.myProcessId
-  P.send (P.ProcessDest pid) otherProcessHeader myPid
+  P.send pid otherProcessHeader myPid
   uids <- forM ([0..count - 1] :: S.Seq Integer) $ \i -> do
     uid <- P.newUniqueId
-    U.sendWithUniqueId (P.ProcessDest pid) uid textHeader . T.pack $
-      printf "%d" i
+    U.sendWithUniqueId pid uid textHeader . T.pack $ printf "%d" i
     liftIO $ printf "Sent: %d\n" i
     return uid
   loop uids

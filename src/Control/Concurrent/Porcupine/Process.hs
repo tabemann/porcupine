@@ -55,6 +55,7 @@ module Control.Concurrent.Porcupine.Process
    UserRemoteDisconnected (..),
    MessageContainer (..),
    UserAssignment (..),
+   IsDest (..),
    myProcessId,
    myNodeId,
    nodeIdOfProcessId,
@@ -225,15 +226,32 @@ makeTag = AnnotationTag . encode
 emptyHeader :: Header
 emptyHeader = Header BS.empty
 
+-- | Destination type class
+class IsDest a where
+  -- | Make destination Id
+  makeDestId :: a -> DestId
+
+-- | Process Id IsDest instance
+instance IsDest ProcessId where
+  makeDestId = ProcessDest
+
+-- | Group Id IsDest instance
+instance IsDest GroupId where
+  makeDestId = GroupDest
+
+-- | Destination Id IsDest instance
+instance IsDest DestId where
+  makeDestId = id
+
 -- | Spawn a process on the local node without a preexisting process.
-spawnInit :: Entry -> Node -> Header -> Payload -> IO ProcessId
+spawnInit :: B.Binary a => Entry -> Node -> Header -> a -> IO ProcessId
 spawnInit entry node header payload =
   spawnInitAnnotated entry node header payload S.empty
 
 -- | Spawn a process on the local node without a preexisting process with
 -- annotations.
-spawnInitAnnotated :: Entry -> Node -> Header -> Payload -> S.Seq Annotation ->
-                      IO ProcessId
+spawnInitAnnotated :: B.Binary a => Entry -> Node -> Header -> a ->
+                      S.Seq Annotation -> IO ProcessId
 spawnInitAnnotated entry node header payload annotations = do
   spawnedPid <- newProcessIdForNode node
   let message =
@@ -241,7 +259,7 @@ spawnInitAnnotated entry node header payload annotations = do
                          Message { msgSourceId = NoSource,
                                    msgDestId = ProcessDest spawnedPid,
                                    msgHeader = header,
-                                   msgPayload = payload,
+                                   msgPayload = encode payload,
                                    msgAnnotations = annotations },
                        spawnEntry = entry,
                        spawnProcessId = spawnedPid,
@@ -257,12 +275,12 @@ spawnInit' :: Process () -> Node -> IO ProcessId
 spawnInit' action node = spawnInit (\_ -> action) node emptyHeader BS.empty
 
 -- | Spawn a process on the local node normally.
-spawn :: Entry -> Header -> Payload -> Process ProcessId
+spawn :: B.Binary a => Entry -> Header -> a -> Process ProcessId
 spawn entry header payload = do
   spawnAnnotated entry header payload S.empty
 
 -- | Spawn a process on the local node normally with annotations.
-spawnAnnotated :: Entry -> Header -> Payload -> S.Seq Annotation ->
+spawnAnnotated :: B.Binary a => Entry -> Header -> a -> S.Seq Annotation ->
                   Process ProcessId
 spawnAnnotated entry header payload annotations = do
   pid <- myProcessId
@@ -271,7 +289,7 @@ spawnAnnotated entry header payload annotations = do
                                Message { msgSourceId = NormalSource pid,
                                          msgDestId = ProcessDest spawnedPid,
                                          msgHeader = header,
-                                         msgPayload = payload,
+                                         msgPayload = encode payload,
                                          msgAnnotations = annotations },
                              spawnEntry = entry,
                              spawnProcessId = spawnedPid,
@@ -284,13 +302,13 @@ spawn' :: Process () -> Process ProcessId
 spawn' action = spawn (\_ -> action) emptyHeader BS.empty
 
 -- | Spawn a process on the local node normally for another process.
-spawnAsProxy :: Entry -> ProcessId -> Header -> Payload -> Process ()
+spawnAsProxy :: B.Binary a  => Entry -> ProcessId -> Header -> a -> Process ()
 spawnAsProxy entry pid header payload =
   spawnAnnotatedAsProxy entry pid header payload S.empty
 
 -- | Spawn a process on the local node normally with annotations for another
 -- process.
-spawnAnnotatedAsProxy :: Entry -> ProcessId -> Header -> Payload ->
+spawnAnnotatedAsProxy :: B.Binary a => Entry -> ProcessId -> Header -> a ->
                          S.Seq Annotation -> Process ()
 spawnAnnotatedAsProxy entry pid header payload annotations = do
   spawnedPid <- newProcessId
@@ -298,7 +316,7 @@ spawnAnnotatedAsProxy entry pid header payload annotations = do
                                Message { msgSourceId = NormalSource pid,
                                          msgDestId = ProcessDest spawnedPid,
                                          msgHeader = header,
-                                         msgPayload = payload,
+                                         msgPayload = encode payload,
                                          msgAnnotations = annotations },
                              spawnEntry = entry,
                              spawnProcessId = spawnedPid,
@@ -311,15 +329,15 @@ spawnAsProxy' :: Process () -> ProcessId -> Process ()
 spawnAsProxy' action pid = spawnAsProxy (\_ -> action) pid emptyHeader BS.empty
 
 -- | Spawn a process on the local node normally and atomically listen for end.
-spawnListenEnd :: Entry -> Header -> Payload -> S.Seq DestId ->
+spawnListenEnd :: B.Binary a => Entry -> Header -> a -> S.Seq DestId ->
                   Process ProcessId
 spawnListenEnd entry header payload endListeners =
   spawnListenEndAnnotated entry header payload S.empty endListeners
 
 -- | Spawn a process on the local node normally with annotation and atomically
 -- listen for end.
-spawnListenEndAnnotated :: Entry -> Header -> Payload -> S.Seq Annotation ->
-                           S.Seq DestId -> Process ProcessId
+spawnListenEndAnnotated :: B.Binary a => Entry -> Header -> a ->
+                           S.Seq Annotation -> S.Seq DestId -> Process ProcessId
 spawnListenEndAnnotated entry header payload annotations endListeners = do
   pid <- myProcessId
   spawnedPid <- newProcessId
@@ -327,7 +345,7 @@ spawnListenEndAnnotated entry header payload annotations endListeners = do
                                Message { msgSourceId = NormalSource pid,
                                          msgDestId = ProcessDest spawnedPid,
                                          msgHeader = header,
-                                         msgPayload = payload,
+                                         msgPayload = encode payload,
                                          msgAnnotations = annotations },
                              spawnEntry = entry,
                              spawnProcessId = spawnedPid,
@@ -343,15 +361,16 @@ spawnListenEnd' action endListeners =
 
 -- | Spawn a process on the local node normally for another process and
 -- atomically listen for end.
-spawnListenEndAsProxy :: Entry -> ProcessId -> Header -> Payload ->
+spawnListenEndAsProxy :: B.Binary a => Entry -> ProcessId -> Header -> a ->
                          S.Seq DestId -> Process ()
 spawnListenEndAsProxy entry pid header payload endListeners =
   spawnListenEndAnnotatedAsProxy entry pid header payload S.empty endListeners
 
 -- | Spawn a process on the local node normally with annotation for another
 -- process and atomically listen for end.
-spawnListenEndAnnotatedAsProxy :: Entry -> ProcessId -> Header -> Payload ->
-                                  S.Seq Annotation -> S.Seq DestId -> Process ()
+spawnListenEndAnnotatedAsProxy :: B.Binary a => Entry -> ProcessId -> Header ->
+                                  a -> S.Seq Annotation -> S.Seq DestId ->
+                                  Process ()
 spawnListenEndAnnotatedAsProxy entry pid header payload annotations
   endListeners = do
   spawnedPid <- newProcessId
@@ -359,7 +378,7 @@ spawnListenEndAnnotatedAsProxy entry pid header payload annotations
                                Message { msgSourceId = NormalSource pid,
                                          msgDestId = ProcessDest spawnedPid,
                                          msgHeader = header,
-                                         msgPayload = payload,
+                                         msgPayload = encode payload,
                                          msgAnnotations = annotations },
                              spawnEntry = entry,
                              spawnProcessId = spawnedPid,
@@ -373,78 +392,79 @@ spawnListenEndAsProxy' action pid endListeners =
   spawnListenEndAsProxy (\_ -> action) pid emptyHeader BS.empty endListeners
 
 -- | Send a message to a process or group.
-send :: B.Binary a => DestId -> Header -> a -> Process ()
-send did header payload = sendAnnotated did header payload S.empty
+send :: (IsDest a, B.Binary b) => a -> Header -> b -> Process ()
+send dest header payload = sendAnnotated dest header payload S.empty
 
 -- | Send a message to a process or group with annotations.
-sendAnnotated :: B.Binary a => DestId -> Header -> a -> S.Seq Annotation ->
-                 Process ()
-sendAnnotated did header payload annotations = do
+sendAnnotated :: (IsDest a, B.Binary b) => a -> Header -> b ->
+                 S.Seq Annotation -> Process ()
+sendAnnotated dest header payload annotations = do
   pid <- myProcessId
   sendEvent $ UserMessage { umsgMessage =
                               Message { msgSourceId = NormalSource pid,
-                                        msgDestId = did,
+                                        msgDestId = makeDestId dest,
                                         msgHeader = header,
                                         msgPayload = encode payload,
                                         msgAnnotations = annotations } }
 
 -- | Send a message to a process or group for another process.
-sendAsProxy :: B.Binary a => DestId -> SourceId -> Header -> a -> Process ()
-sendAsProxy did sid header payload =
-  sendAnnotatedAsProxy did sid header payload S.empty
+sendAsProxy :: (IsDest a, B.Binary b) => a -> SourceId -> Header -> b ->
+               Process ()
+sendAsProxy dest sid header payload =
+  sendAnnotatedAsProxy dest sid header payload S.empty
 
 -- | Send a message to a process or group for another process with annotation.
-sendAnnotatedAsProxy :: B.Binary a => DestId -> SourceId -> Header -> a ->
-                        S.Seq Annotation -> Process ()
-sendAnnotatedAsProxy did sid header payload annotations = do
+sendAnnotatedAsProxy :: (IsDest a, B.Binary b) => a -> SourceId -> Header ->
+                        b -> S.Seq Annotation -> Process ()
+sendAnnotatedAsProxy dest sid header payload annotations = do
   sendEvent $ UserMessage { umsgMessage =
                               Message { msgSourceId = sid,
-                                        msgDestId = did,
+                                        msgDestId = makeDestId dest,
                                         msgHeader = header,
                                         msgPayload = encode payload,
                                         msgAnnotations = annotations } }
 
 -- | Send a message with unencoded data to a process or group.
-sendRaw :: DestId -> Header -> Payload -> Process ()
-sendRaw did header payload = sendRawAnnotated did header payload S.empty
+sendRaw :: IsDest a => a -> Header -> Payload -> Process ()
+sendRaw dest header payload = sendRawAnnotated dest header payload S.empty
 
 -- | Send a message with unencoded data to a process or group with annotations.
-sendRawAnnotated :: DestId -> Header -> Payload -> S.Seq Annotation ->
-                     Process ()
-sendRawAnnotated did header payload annotations = do
+sendRawAnnotated :: IsDest a => a -> Header -> Payload -> S.Seq Annotation ->
+                    Process ()
+sendRawAnnotated dest header payload annotations = do
   pid <- myProcessId
   sendEvent $ UserMessage { umsgMessage =
                               Message { msgSourceId = NormalSource pid,
-                                        msgDestId = did,
+                                        msgDestId = makeDestId dest,
                                         msgHeader = header,
                                         msgPayload = payload,
                                         msgAnnotations = annotations } }
 
 -- | Send a message with unencoded data to a process or group for another
 -- process.
-sendRawAsProxy :: DestId -> SourceId -> Header -> Payload -> Process ()
-sendRawAsProxy did sid header payload =
-  sendAnnotatedAsProxy did sid header payload S.empty
+sendRawAsProxy :: IsDest a => a -> SourceId -> Header -> Payload -> Process ()
+sendRawAsProxy dest sid header payload =
+  sendAnnotatedAsProxy dest sid header payload S.empty
 
 -- | Send a message with unencoded data to a process or group for another
 -- process with annotation.
-sendRawAnnotatedAsProxy :: DestId -> SourceId -> Header -> Payload ->
-                            S.Seq Annotation -> Process ()
-sendRawAnnotatedAsProxy did sid header payload annotations = do
+sendRawAnnotatedAsProxy :: IsDest a => a -> SourceId -> Header -> Payload ->
+                           S.Seq Annotation -> Process ()
+sendRawAnnotatedAsProxy dest sid header payload annotations = do
   sendEvent $ UserMessage { umsgMessage =
                               Message { msgSourceId = sid,
-                                        msgDestId = did,
+                                        msgDestId = makeDestId dest,
                                         msgHeader = header,
                                         msgPayload = payload,
                                         msgAnnotations = annotations } }
 
 -- | Quit the current process.
-quit :: Header -> Payload -> Process ()
+quit :: B.Binary a => Header -> a -> Process ()
 quit header payload = do
   pid <- myProcessId
   sendEvent $ QuitMessage { quitProcessId = pid,
                             quitHeader = header,
-                            quitPayload = payload }
+                            quitPayload = encode payload }
   threadId <- liftIO myThreadId
   liftIO $ killThread threadId
 
@@ -457,45 +477,46 @@ genericQuitHeader :: Header
 genericQuitHeader = makeHeader ("genericQuit" :: T.Text)
 
 -- | Kill another process or process group.
-kill :: DestId -> Header -> Payload -> Process ()
-kill did header payload = do
+kill :: (IsDest a, B.Binary b) => a -> Header -> b -> Process ()
+kill dest header payload = do
   pid <- myProcessId
   sendEvent $ KillMessage { killProcessId = pid,
-                            killDestId = did,
+                            killDestId = makeDestId dest,
                             killHeader = header,
-                            killPayload = payload }
+                            killPayload = encode payload }
 
 -- | Kill another process or process group with a generic kill message header
 -- and payload.
-kill' :: DestId -> Process ()
-kill' did = kill did genericKillHeader BS.empty
+kill' :: IsDest a => a -> Process ()
+kill' dest = kill dest genericKillHeader BS.empty
 
 -- | Generic kill header
 genericKillHeader :: Header
 genericKillHeader = makeHeader ("genericKill" :: T.Text)
 
 -- | Kill another process or process group for another process.
-killAsProxy :: DestId -> ProcessId -> Header -> Payload -> Process ()
-killAsProxy did pid header payload = do
+killAsProxy :: (IsDest a, B.Binary b) => a -> ProcessId -> Header -> b ->
+               Process ()
+killAsProxy dest pid header payload = do
   sendEvent $ KillMessage { killProcessId = pid,
-                            killDestId = did,
+                            killDestId = makeDestId dest,
                             killHeader = header,
-                            killPayload = payload }
+                            killPayload = encode payload }
 
 -- | Kill another process or process group for another process with a generic
 -- kill message header and payload.
-killAsProxy' :: DestId -> ProcessId -> Process ()
-killAsProxy' did pid =
-  killAsProxy did pid genericKillHeader BS.empty
+killAsProxy' :: IsDest a => a -> ProcessId -> Process ()
+killAsProxy' dest pid =
+  killAsProxy dest pid genericKillHeader BS.empty
 
 -- | Shutdown a node.
-shutdown :: NodeId -> Header -> Payload -> Process ()
+shutdown :: B.Binary a => NodeId -> Header -> a -> Process ()
 shutdown nid header payload = do
   pid <- myProcessId
   sendEvent $ ShutdownMessage { shutProcessId = pid,
                                 shutNodeId = nid,
                                 shutHeader = header,
-                                shutPayload = payload }
+                                shutPayload = encode payload }
   myNid <- myNodeId
   if nid == myNid
     then do tid <- liftIO myThreadId
@@ -556,32 +577,32 @@ unsubscribeAsProxy gid pid = do
                                    usubGroupId = gid }
 
 -- | Listen for termination of another process or any member of a group.
-listenEnd :: DestId -> Process ()
-listenEnd listenedId = do
+listenEnd :: IsDest a => a -> Process ()
+listenEnd listenedDest = do
   pid <- myProcessId
-  sendEvent $ ListenEndMessage { lendListenedId = listenedId,
+  sendEvent $ ListenEndMessage { lendListenedId = makeDestId listenedDest,
                                  lendListenerId = ProcessDest pid }
 
 -- | Stop listening for termination of another process or any member of a group.
-unlistenEnd :: DestId -> Process ()
-unlistenEnd listenedId = do
+unlistenEnd :: IsDest a => a -> Process ()
+unlistenEnd listenedDest = do
   pid <- myProcessId
-  sendEvent $ UnlistenEndMessage { ulendListenedId = listenedId,
+  sendEvent $ UnlistenEndMessage { ulendListenedId = makeDestId listenedDest,
                                    ulendListenerId = ProcessDest pid }
 
 -- | Set another process or group to listen for termination of another process
 -- or any member of a group.
-listenEndAsProxy :: DestId -> DestId -> Process ()
-listenEndAsProxy listenedId listenerId = do
-  sendEvent $ ListenEndMessage { lendListenedId = listenedId,
-                                 lendListenerId = listenerId }
+listenEndAsProxy :: (IsDest a, IsDest b) => a -> b -> Process ()
+listenEndAsProxy listenedDest listenerDest = do
+  sendEvent $ ListenEndMessage { lendListenedId = makeDestId listenedDest,
+                                 lendListenerId = makeDestId listenerDest }
 
 -- | Set another process or group to listen for termination of another process
 -- or any member of a group.
-unlistenEndAsProxy :: DestId -> DestId -> Process ()
-unlistenEndAsProxy listenedId listenerId = do
-  sendEvent $ UnlistenEndMessage { ulendListenedId = listenedId,
-                                   ulendListenerId = listenerId }
+unlistenEndAsProxy :: (IsDest a, IsDest b) => a -> b -> Process ()
+unlistenEndAsProxy listenedDest listenerDest = do
+  sendEvent $ UnlistenEndMessage { ulendListenedId = makeDestId listenedDest,
+                                   ulendListenerId = makeDestId listenerDest }
 
 -- | Listen for name assignment and unassignment.
 listenAssign :: Process ()
@@ -597,19 +618,20 @@ unlistenAssign = do
 
 -- | Set another process or group to listen for name assignment and
 -- unassignment.
-listenAssignAsProxy :: DestId -> Process ()
-listenAssignAsProxy listenerId = do
-  sendEvent $ ListenAssignMessage { lassDestId = listenerId }
+listenAssignAsProxy :: IsDest a => a -> Process ()
+listenAssignAsProxy listenerDest = do
+  sendEvent $ ListenAssignMessage { lassDestId = makeDestId listenerDest }
 
 -- | Set another process or group to stop listening for name assignment and
 -- unassignment.
-unlistenAssignAsProxy :: DestId -> Process ()
-unlistenAssignAsProxy listenerId = do
-  sendEvent $ UnlistenAssignMessage { ulassDestId = listenerId }
+unlistenAssignAsProxy :: IsDest a => a -> Process ()
+unlistenAssignAsProxy listenerDest = do
+  sendEvent $ UnlistenAssignMessage { ulassDestId = makeDestId listenerDest }
 
 -- | Assign a name to a process or group.
-assign :: Name -> DestId -> Process ()
-assign name did = do
+assign :: IsDest a => Name -> a -> Process ()
+assign name dest = do
+  let did = makeDestId dest
   names <- nodeNames . procNode <$> Process St.get
   join . liftIO . atomically $ do
     names' <- readTVar names
@@ -630,8 +652,9 @@ assign name did = do
                                          assNew = new }
 
 -- | Unassign a name from a process or group.
-unassign :: Name -> DestId -> Process ()
-unassign name did = do
+unassign :: IsDest a => Name -> a -> Process ()
+unassign name dest = do
+  let did = makeDestId dest
   names <- nodeNames . procNode <$> Process St.get
   join . liftIO . atomically $ do
     names' <- readTVar names

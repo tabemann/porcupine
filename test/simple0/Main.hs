@@ -97,13 +97,13 @@ simpleMessageReceiver = do
 simpleMessageSender :: P.ProcessId -> P.Process ()
 simpleMessageSender pid = do
   liftIO $ putStrLn "Listening for termination..."
-  P.listenEnd $ P.ProcessDest pid
+  P.listenEnd pid
   liftIO $ putStrLn "Starting to send messages..."
   forM_ ([1..100] :: [Integer]) $ \n -> do
     liftIO . putStrLn . T.pack $ printf "Sending %d" n
-    P.send (P.ProcessDest pid) textHeader . T.pack $ printf "%d" n
+    P.send pid textHeader . T.pack $ printf "%d" n
   liftIO $ putStrLn "Sending message requesting quit..."
-  P.send (P.ProcessDest pid) normalQuitHeader BS.empty
+  P.send pid normalQuitHeader BS.empty
   liftIO $ putStrLn "Waiting for termination..."
   P.receive [\msg ->
                if U.matchProcessId msg pid then Just $ return () else Nothing]

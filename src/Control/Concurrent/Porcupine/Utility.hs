@@ -277,10 +277,10 @@ sendWithUniqueId dest uid header payload =
   P.sendAnnotated dest header payload [P.Annotation uniqueIdTag $ encode uid]
 
 -- | Send a message as a proxy with a unique Id.
-sendWithUniqueIdAsProxy :: (P.IsDest a, B.Binary b) => a -> P.SourceId ->
-                           P.UniqueId -> P.Header -> b -> P.Process ()
-sendWithUniqueIdAsProxy dest sid uid header payload =
-  P.sendAnnotatedAsProxy dest sid header payload
+sendWithUniqueIdAsProxy :: (P.IsDest a, P.IsSource b, B.Binary c) => a -> b ->
+                           P.UniqueId -> P.Header -> c -> P.Process ()
+sendWithUniqueIdAsProxy dest source uid header payload =
+  P.sendAnnotatedAsProxy dest source header payload
     [P.Annotation uniqueIdTag $ encode uid]
 
 -- | Reply to a message.

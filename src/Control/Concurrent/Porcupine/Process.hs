@@ -56,6 +56,7 @@ module Control.Concurrent.Porcupine.Process
    MessageContainer (..),
    UserAssignment (..),
    IsDest (..),
+   IsSource (..),
    myProcessId,
    myNodeId,
    nodeIdOfProcessId,
@@ -243,6 +244,19 @@ instance IsDest GroupId where
 instance IsDest DestId where
   makeDestId = id
 
+-- | Source type class
+class IsSource a where
+  -- | Make source Id
+  makeSourceId :: a -> SourceId
+
+-- | Process Id IsSource instance
+instance IsSource ProcessId where
+  makeSourceId = NormalSource
+
+-- | Source Id IsSource instance
+instance IsSource SourceId where
+  makeSourceId = id
+
 -- | Spawn a process on the local node without a preexisting process.
 spawnInit :: B.Binary a => Entry -> Node -> Header -> a -> IO ProcessId
 spawnInit entry node header payload =
@@ -408,17 +422,17 @@ sendAnnotated dest header payload annotations = do
                                         msgAnnotations = annotations } }
 
 -- | Send a message to a process or group for another process.
-sendAsProxy :: (IsDest a, B.Binary b) => a -> SourceId -> Header -> b ->
+sendAsProxy :: (IsDest a, IsSource b, B.Binary c) => a -> b -> Header -> c ->
                Process ()
-sendAsProxy dest sid header payload =
-  sendAnnotatedAsProxy dest sid header payload S.empty
+sendAsProxy dest source header payload =
+  sendAnnotatedAsProxy dest source header payload S.empty
 
 -- | Send a message to a process or group for another process with annotation.
-sendAnnotatedAsProxy :: (IsDest a, B.Binary b) => a -> SourceId -> Header ->
-                        b -> S.Seq Annotation -> Process ()
-sendAnnotatedAsProxy dest sid header payload annotations = do
+sendAnnotatedAsProxy :: (IsDest a, IsSource b, B.Binary c) => a -> b ->
+                        Header -> c -> S.Seq Annotation -> Process ()
+sendAnnotatedAsProxy dest source header payload annotations = do
   sendEvent $ UserMessage { umsgMessage =
-                              Message { msgSourceId = sid,
+                              Message { msgSourceId = makeSourceId source,
                                         msgDestId = makeDestId dest,
                                         msgHeader = header,
                                         msgPayload = encode payload,
@@ -442,17 +456,18 @@ sendRawAnnotated dest header payload annotations = do
 
 -- | Send a message with unencoded data to a process or group for another
 -- process.
-sendRawAsProxy :: IsDest a => a -> SourceId -> Header -> Payload -> Process ()
-sendRawAsProxy dest sid header payload =
-  sendAnnotatedAsProxy dest sid header payload S.empty
+sendRawAsProxy :: (IsDest a, IsSource b) => a -> b -> Header -> Payload ->
+                  Process ()
+sendRawAsProxy dest source header payload =
+  sendAnnotatedAsProxy dest source header payload S.empty
 
 -- | Send a message with unencoded data to a process or group for another
 -- process with annotation.
-sendRawAnnotatedAsProxy :: IsDest a => a -> SourceId -> Header -> Payload ->
-                           S.Seq Annotation -> Process ()
-sendRawAnnotatedAsProxy dest sid header payload annotations = do
+sendRawAnnotatedAsProxy :: (IsDest a, IsSource b) => a -> b -> Header ->
+                           Payload -> S.Seq Annotation -> Process ()
+sendRawAnnotatedAsProxy dest source header payload annotations = do
   sendEvent $ UserMessage { umsgMessage =
-                              Message { msgSourceId = sid,
+                              Message { msgSourceId = makeSourceId source,
                                         msgDestId = makeDestId dest,
                                         msgHeader = header,
                                         msgPayload = payload,
